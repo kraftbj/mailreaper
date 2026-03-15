@@ -76,10 +76,12 @@ function renderRulesList() {
         header: "Expires header",
         llm: "AI analysis",
         "content-regex": "Regex",
+        classify: `→ ${rule.classifyFolder || "Paper-Trail"}`,
+        "llm-classify": `AI → ${rule.classifyFolder || "Paper-Trail"}`,
       }[rule.expiration.type] || rule.expiration.type;
 
       const badges = [];
-      if (rule.expiration.type === "llm") badges.push('<span class="rule-badge llm">AI</span>');
+      if (rule.expiration.type === "llm" || rule.expiration.type === "llm-classify") badges.push('<span class="rule-badge llm">AI</span>');
       if (rule.builtin) badges.push('<span class="rule-badge builtin">Built-in</span>');
 
       return `
@@ -148,6 +150,8 @@ function openRuleEditor(ruleId) {
     document.getElementById("ruleTtlHours").value = rule.expiration.hours || 2;
     document.getElementById("ruleRegex").value = rule.expiration.pattern || "";
     document.getElementById("ruleLlmPrompt").value = rule.expiration.prompt || "";
+    document.getElementById("ruleClassifyFolder").value = rule.classifyFolder || "Paper-Trail";
+    document.getElementById("ruleClassifyCategory").value = rule.expiration.category || "receipt";
     document.getElementById("ruleAction").value = rule.action;
     document.getElementById("ruleGracePeriod").value = rule.gracePeriodDays;
 
@@ -162,6 +166,8 @@ function openRuleEditor(ruleId) {
     document.getElementById("ruleTtlHours").value = 2;
     document.getElementById("ruleRegex").value = "";
     document.getElementById("ruleLlmPrompt").value = "";
+    document.getElementById("ruleClassifyFolder").value = "Paper-Trail";
+    document.getElementById("ruleClassifyCategory").value = "receipt";
     document.getElementById("ruleAction").value = "move";
     document.getElementById("ruleGracePeriod").value = 7;
 
@@ -178,7 +184,9 @@ function updateExpirationFields() {
   const type = document.getElementById("ruleExpirationType").value;
   document.getElementById("fieldTtlHours").hidden = type !== "ttl";
   document.getElementById("fieldRegex").hidden = type !== "content-regex";
-  document.getElementById("fieldLlmPrompt").hidden = type !== "llm";
+  document.getElementById("fieldLlmPrompt").hidden = type !== "llm" && type !== "llm-classify";
+  document.getElementById("fieldClassifyFolder").hidden = type !== "classify" && type !== "llm-classify";
+  document.getElementById("fieldClassifyCategory").hidden = type !== "llm-classify";
 }
 
 document.getElementById("btnSaveRule").addEventListener("click", async () => {
@@ -191,7 +199,12 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
   const expiration = { type: expType };
   if (expType === "ttl") expiration.hours = parseFloat(document.getElementById("ruleTtlHours").value);
   if (expType === "content-regex") expiration.pattern = document.getElementById("ruleRegex").value;
-  if (expType === "llm") expiration.prompt = document.getElementById("ruleLlmPrompt").value || undefined;
+  if (expType === "llm" || expType === "llm-classify") expiration.prompt = document.getElementById("ruleLlmPrompt").value || undefined;
+  if (expType === "llm-classify") expiration.category = document.getElementById("ruleClassifyCategory").value;
+
+  const classifyFolder = (expType === "classify" || expType === "llm-classify")
+    ? (document.getElementById("ruleClassifyFolder").value || "Paper-Trail")
+    : undefined;
 
   const rule = {
     id: editingRuleId || undefined,
@@ -209,6 +222,7 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
     expiration,
     action: document.getElementById("ruleAction").value,
     destination: null,
+    ...(classifyFolder && { classifyFolder }),
     tag: null,
     gracePeriodDays: parseInt(document.getElementById("ruleGracePeriod").value),
     builtin: editingRuleId
@@ -432,6 +446,7 @@ document.getElementById("btnSaveFolders").addEventListener("click", async () => 
 
 const ACTION_ICONS = {
   moved: "📦",
+  classified: "📂",
   deleted: "🗑️",
   tagged: "🏷️",
   grace_deleted: "💀",

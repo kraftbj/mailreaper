@@ -4,6 +4,7 @@
 
 const ACTION_ICONS = {
   moved: "📦",
+  classified: "📂",
   deleted: "🗑️",
   tagged: "🏷️",
   grace_deleted: "💀",
@@ -49,9 +50,12 @@ async function loadStatus() {
 
     // Last scan
     if (status.lastScanTime) {
-      document.getElementById("lastScan").textContent = formatRelativeTime(
-        new Date(status.lastScanTime)
-      );
+      const scanDate = new Date(status.lastScanTime);
+      if (!isNaN(scanDate.getTime())) {
+        document.getElementById("lastScan").textContent = formatRelativeTime(scanDate);
+      }
+    } else if (status.scanInProgress) {
+      document.getElementById("lastScan").textContent = "In progress...";
     }
 
     // Next scan
