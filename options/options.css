@@ -432,3 +432,56 @@ input[type="range"] {
   padding: 32px;
   color: var(--text-muted);
 }
+
+/* ── Callout ──────────────────────────────────────────────────── */
+
+.callout {
+  background: #2a2a1a;
+  border: 1px solid #665500;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #f0d060;
+}
+
+/* ── Folder improvements ──────────────────────────────────────── */
+
+.folder-account-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.folder-account-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.folder-account-actions button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.folder-account-actions button:hover {
+  text-decoration: underline;
+}
+
+.folder-item {
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.folder-item:hover {
+  background: var(--border-light);
+}
+
+.folder-item input[type="checkbox"]:checked + span,
+.folder-item label:has(input:checked) {
+  font-weight: 500;
+}

@@ -51,7 +51,7 @@
 
         <div class="field">
           <label for="maxPerScan">Max messages per scan</label>
-          <input type="number" id="maxPerScan" min="10" max="1000" step="10">
+          <input type="number" id="maxPerScan" min="10" max="10000" step="10">
           <p class="hint">Rate limit to avoid UI freezes and excessive LLM calls.</p>
         </div>
       </div>
@@ -279,11 +279,14 @@
 
     <!-- ── Folders Tab ─────────────────────────────────────────────── -->
     <section id="tab-folders" class="tab-content">
+      <div id="folderCallout" class="callout" hidden>
+        <strong>No folders selected.</strong> Check the boxes next to the folders you want MailReaper to scan for expired emails. Most people start with their Inbox.
+      </div>
+
       <div class="card">
         <h2>Folders to Scan</h2>
         <p class="hint" style="margin-bottom: 12px;">
-          Select which folders MailReaper should check for expired emails.
-          If none are selected, only Inbox folders will be scanned.
+          Check the folders MailReaper should monitor. When no folders are selected, only Inbox folders are scanned.
         </p>
 
         <div id="folderTree" class="folder-tree">

@@ -336,8 +336,14 @@ async function loadFolders() {
   container.innerHTML = accounts
     .map(
       (account) => `
-    <div class="folder-account">
-      <div class="folder-account-name">📧 ${escapeHtml(account.name)} (${account.type})</div>
+    <div class="folder-account" data-account-id="${account.id}">
+      <div class="folder-account-header">
+        <div class="folder-account-name">${escapeHtml(account.name)} (${account.type})</div>
+        <div class="folder-account-actions">
+          <button class="btn-select-all" data-account-id="${account.id}">Select all</button>
+          <button class="btn-select-none" data-account-id="${account.id}">Select none</button>
+        </div>
+      </div>
       ${account.folders
         .map((folder) => {
           const depth = (folder.path.match(/\//g) || []).length;
@@ -348,6 +354,7 @@ async function loadFolders() {
             <label>
               <input type="checkbox" class="folder-checkbox"
                      data-folder-id="${folder.id}"
+                     data-account-id="${account.id}"
                      ${selectedFolderIds.has(folder.id) ? "checked" : ""}>
               ${icon} ${escapeHtml(folder.name)}
             </label>
@@ -365,8 +372,38 @@ async function loadFolders() {
       } else {
         selectedFolderIds.delete(e.target.dataset.folderId);
       }
+      updateFolderCallout();
     });
   });
+
+  container.querySelectorAll(".btn-select-all").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const accountId = btn.dataset.accountId;
+      container.querySelectorAll(`.folder-checkbox[data-account-id="${accountId}"]`).forEach((cb) => {
+        cb.checked = true;
+        selectedFolderIds.add(cb.dataset.folderId);
+      });
+      updateFolderCallout();
+    });
+  });
+
+  container.querySelectorAll(".btn-select-none").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const accountId = btn.dataset.accountId;
+      container.querySelectorAll(`.folder-checkbox[data-account-id="${accountId}"]`).forEach((cb) => {
+        cb.checked = false;
+        selectedFolderIds.delete(cb.dataset.folderId);
+      });
+      updateFolderCallout();
+    });
+  });
+
+  updateFolderCallout();
+}
+
+function updateFolderCallout() {
+  const callout = document.getElementById("folderCallout");
+  callout.hidden = selectedFolderIds.size > 0;
 }
 
 function folderIcon(type) {
