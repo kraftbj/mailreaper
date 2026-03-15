@@ -57,6 +57,23 @@ async function loadStatus() {
     document.getElementById("llmProvider").textContent =
       providerNames[settings.llmProvider] || "None";
 
+    // Error display
+    const errorRow = document.getElementById("errorRow");
+    if (status.lastScanError) {
+      errorRow.style.display = "";
+      document.getElementById("lastError").textContent = status.lastScanError;
+    } else {
+      errorRow.style.display = "none";
+    }
+
+    // Poll faster while scanning
+    if (status.scanInProgress && !fastPolling) {
+      fastPolling = setInterval(loadStatus, 1500);
+    } else if (!status.scanInProgress && fastPolling) {
+      clearInterval(fastPolling);
+      fastPolling = null;
+    }
+
     // Activity log
     renderActivity(activityLog);
   } catch (e) {
@@ -119,23 +136,41 @@ document.getElementById("btnScan").addEventListener("click", async () => {
 
   try {
     await messenger.runtime.sendMessage({ type: "triggerScan" });
-    // Wait a moment then refresh status
-    setTimeout(async () => {
-      await loadStatus();
-      btn.disabled = false;
-      btn.textContent = "Scan Now";
-    }, 3000);
+    // loadStatus polling will update the UI and re-enable when done
+    await loadStatus();
   } catch (e) {
-    btn.disabled = false;
-    btn.textContent = "Scan Now";
     console.error("Scan trigger failed:", e);
   }
+
+  btn.disabled = false;
+  btn.textContent = "Scan Now";
+});
+
+document.getElementById("btnDiagnose").addEventListener("click", async () => {
+  const btn = document.getElementById("btnDiagnose");
+  const output = document.getElementById("diagOutput");
+  btn.disabled = true;
+  btn.textContent = "Running...";
+  output.style.display = "block";
+  output.textContent = "Running diagnostic...";
+
+  try {
+    const report = await messenger.runtime.sendMessage({ type: "runDiagnostic" });
+    output.textContent = JSON.stringify(report, null, 2);
+  } catch (e) {
+    output.textContent = "Diagnostic failed: " + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = "Diagnose";
 });
 
 document.getElementById("btnSettings").addEventListener("click", () => {
   messenger.runtime.openOptionsPage();
   window.close();
 });
+
+let fastPolling = null;
 
 // ── Init ────────────────────────────────────────────────────────────────────
 

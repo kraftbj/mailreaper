@@ -216,6 +216,10 @@
       <span class="label">LLM Provider</span>
       <span id="llmProvider">None</span>
     </div>
+    <div class="info-row" id="errorRow" style="display:none">
+      <span class="label">Error</span>
+      <span id="lastError" style="color:#e74c3c">—</span>
+    </div>
   </div>
 
   <div class="activity">
@@ -227,8 +231,11 @@
 
   <div class="actions">
     <button class="primary" id="btnScan">Scan Now</button>
+    <button id="btnDiagnose">Diagnose</button>
     <button id="btnSettings">Settings</button>
   </div>
+
+  <div id="diagOutput" style="display:none; padding: 8px 16px; font-size: 11px; font-family: monospace; white-space: pre-wrap; color: var(--text-muted); max-height: 300px; overflow-y: auto; border-top: 1px solid var(--border);"></div>
 
   <script src="popup.js" type="module"></script>
 </body>
