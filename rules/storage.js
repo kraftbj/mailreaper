@@ -239,7 +239,7 @@ export async function getCachedVerdict(messageIdHeader) {
   if (!entry) return null;
 
   const age = Date.now() - entry.cachedAt;
-  const ttl = entry.verdict?.expired ? CACHE_TTL_EXPIRED_MS : CACHE_TTL_NOT_SENSITIVE_MS;
+  const ttl = (entry.verdict?.expired || entry.verdict?.classified) ? CACHE_TTL_EXPIRED_MS : CACHE_TTL_NOT_SENSITIVE_MS;
 
   if (age > ttl) {
     return null;
