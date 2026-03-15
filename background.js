@@ -20,6 +20,13 @@ const GRACE_ALARM_NAME = "mailreaper-grace-cleanup";
 let scanInProgress = false;
 let lastScanTime = null;
 let lastScanResults = { processed: 0, expired: 0, errors: 0 };
+let lastScanError = null;
+
+// Tracks messages already evaluated with no match.
+// Keyed by message ID, value is the rules fingerprint at evaluation time.
+// When rules change, only messages affected by the change are re-evaluated.
+let evaluatedNoMatch = new Map();
+let currentRulesFingerprint = null;
 
 // ── Initialization ──────────────────────────────────────────────────────────
 
@@ -72,27 +79,49 @@ async function runScan() {
   }
 
   scanInProgress = true;
+  lastScanError = null;
   const startTime = Date.now();
   let processed = 0;
   let expired = 0;
   let errors = 0;
 
+  // Update results in real-time so the popup always reflects progress
+  function updateProgress() {
+    lastScanTime = new Date().toISOString();
+    lastScanResults = { processed, expired, errors };
+  }
+
   try {
     const settings = await getSettings();
 
     if (!settings.scanEnabled) {
+      lastScanError = "Scanning is disabled in settings";
       console.log("[MailReaper] Scanning is disabled");
+      updateProgress();
       return;
     }
 
     const folders = await resolveScanFolders(settings);
 
     if (folders.length === 0) {
+      lastScanError = "No folders resolved for scanning";
       console.log("[MailReaper] No folders configured for scanning");
+      updateProgress();
       return;
     }
 
-    console.log(`[MailReaper] Starting scan of ${folders.length} folder(s)...`);
+    // Compute rules fingerprint for cache validity
+    const rules = await getRules();
+    const fingerprint = computeRulesFingerprint(rules);
+    if (currentRulesFingerprint !== null && currentRulesFingerprint !== fingerprint) {
+      evaluatedNoMatch.clear();
+      console.log("[MailReaper] Rules fingerprint changed, cleared evaluation cache");
+    }
+    currentRulesFingerprint = fingerprint;
+
+    const cachedCount = evaluatedNoMatch.size;
+    console.log(`[MailReaper] Starting scan of ${folders.length} folder(s):`, folders.map((f) => f.path || f.name));
+    console.log(`[MailReaper] Skipping ${cachedCount} previously evaluated messages`);
 
     const minAgeMs = settings.minMessageAgeMinutes * 60 * 1000;
     const cutoffDate = new Date(Date.now() - minAgeMs);
@@ -107,25 +136,34 @@ async function runScan() {
           if (processed >= settings.maxMessagesPerScan) break;
           processed++;
 
+          // Update progress every 50 messages
+          if (processed % 50 === 0) updateProgress();
+
           try {
-            // Get full message for header access
-            const fullMessage = await messenger.messages.getFull(message.id);
+            // Skip messages we've already evaluated with no match
+            // under the current rules fingerprint
+            if (evaluatedNoMatch.get(message.id) === fingerprint) continue;
 
-            // Get body text for content analysis
-            let bodyText = "";
-            try {
-              const parts = await messenger.messages.listInlineTextParts(message.id);
-              bodyText = parts.map((p) => p.content).join("\n");
-            } catch {
-              // Some messages may not have accessible inline parts
-            }
-
-            // Evaluate against rules
-            const verdict = await evaluateMessage(message, fullMessage, bodyText);
+            // Evaluate against rules — full message data is fetched lazily
+            // only when a rule actually needs it (e.g. Expires header, LLM)
+            const verdict = await evaluateMessage(
+              message,
+              () => messenger.messages.getFull(message.id),
+              async () => {
+                try {
+                  const parts = await messenger.messages.listInlineTextParts(message.id);
+                  return parts.map((p) => p.content).join("\n");
+                } catch {
+                  return "";
+                }
+              }
+            );
 
             if (verdict && verdict.expired) {
               await executeAction(message, verdict);
               expired++;
+            } else if (!verdict) {
+              evaluatedNoMatch.set(message.id, fingerprint);
             }
           } catch (e) {
             errors++;
@@ -137,9 +175,6 @@ async function runScan() {
         console.error(`[MailReaper] Error scanning folder ${folder.id}:`, e);
       }
     }
-
-    lastScanTime = new Date().toISOString();
-    lastScanResults = { processed, expired, errors };
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(
@@ -155,9 +190,11 @@ async function runScan() {
       });
     }
   } catch (e) {
+    lastScanError = e.message;
     console.error("[MailReaper] Scan failed:", e);
   } finally {
     scanInProgress = false;
+    updateProgress();
   }
 }
 
@@ -165,36 +202,36 @@ async function runScan() {
  * Resolve which folders to scan based on settings.
  */
 async function resolveScanFolders(settings) {
-  if (settings.scannedFolderIds && settings.scannedFolderIds.length > 0) {
-    // User has configured specific folders
-    const folders = [];
-    for (const folderId of settings.scannedFolderIds) {
-      try {
-        const folder = await messenger.folders.get(folderId);
-        if (folder) folders.push(folder);
-      } catch (e) {
-        console.warn(`[MailReaper] Could not resolve folder ${folderId}:`, e);
-      }
-    }
-    return folders;
-  }
-
-  // Default: scan all inbox folders across accounts
-  const accounts = await messenger.accounts.list();
-  const folders = [];
+  // Build a map of all folders across all accounts
+  const accounts = await messenger.accounts.list(true);
+  const allFolders = [];
 
   for (const account of accounts) {
-    const fullAccount = await messenger.accounts.get(account.id, true);
-    if (fullAccount && fullAccount.folders) {
-      for (const folder of fullAccount.folders) {
-        if (folder.type === "inbox") {
-          folders.push(folder);
-        }
-      }
-    }
+    collectFolders(account.rootFolder?.subFolders || [], allFolders);
   }
 
-  return folders;
+  if (settings.scannedFolderIds && settings.scannedFolderIds.length > 0) {
+    // User has configured specific folders — match by ID
+    const idSet = new Set(settings.scannedFolderIds);
+    const matched = allFolders.filter((f) => idSet.has(f.id));
+    if (matched.length > 0) return matched;
+    console.warn("[MailReaper] No configured folders matched, falling back to Inbox");
+  }
+
+  // Default: scan all inbox folders
+  return allFolders.filter((f) => f.type === "inbox");
+}
+
+/**
+ * Recursively collect all folders into a flat array.
+ */
+function collectFolders(folders, result) {
+  for (const folder of folders) {
+    result.push(folder);
+    if (folder.subFolders && folder.subFolders.length > 0) {
+      collectFolders(folder.subFolders, result);
+    }
+  }
 }
 
 /**
@@ -221,6 +258,7 @@ async function getCandidateMessages(folder, cutoffDate, settings) {
     console.error(`[MailReaper] Query failed for folder ${folder.path}:`, e);
   }
 
+  console.log(`[MailReaper] Found ${messages.length} candidate messages in ${folder.name}`);
   return messages;
 }
 
@@ -233,6 +271,7 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
         scanInProgress,
         lastScanTime,
         lastScanResults,
+        lastScanError,
         scanEnabled: (await getSettings()).scanEnabled,
       };
 
@@ -272,6 +311,9 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
     case "getAccounts":
       return getAccountsAndFolders();
 
+    case "runDiagnostic":
+      return runDiagnostic();
+
     default:
       console.warn("[MailReaper] Unknown message type:", message.type);
       return null;
@@ -282,16 +324,16 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
  * Get all accounts and their folder trees for the settings UI.
  */
 async function getAccountsAndFolders() {
-  const accounts = await messenger.accounts.list();
+  const accounts = await messenger.accounts.list(true);
   const result = [];
 
   for (const account of accounts) {
-    const full = await messenger.accounts.get(account.id, true);
+    const topFolders = account.rootFolder?.subFolders || [];
     result.push({
       id: account.id,
       name: account.name,
       type: account.type,
-      folders: flattenFolders(full.folders || [], ""),
+      folders: flattenFolders(topFolders, ""),
     });
   }
 
@@ -318,6 +360,146 @@ function flattenFolders(folders, prefix) {
   }
   return result;
 }
+
+// ── Diagnostic ──────────────────────────────────────────────────────────────
+
+async function runDiagnostic() {
+  const report = { steps: [] };
+
+  try {
+    // Step 1: Check settings
+    const settings = await getSettings();
+    report.steps.push({
+      step: "Settings",
+      scanEnabled: settings.scanEnabled,
+      scannedFolderIds: settings.scannedFolderIds,
+      maxMessagesPerScan: settings.maxMessagesPerScan,
+      minMessageAgeMinutes: settings.minMessageAgeMinutes,
+    });
+
+    // Step 2: Resolve folders
+    const folders = await resolveScanFolders(settings);
+    report.steps.push({
+      step: "Folders resolved",
+      count: folders.length,
+      folders: folders.map((f) => ({ id: f.id, name: f.name, type: f.type, path: f.path })),
+    });
+
+    if (folders.length === 0) {
+      report.steps.push({ step: "PROBLEM", detail: "No folders resolved — nothing to scan" });
+      return report;
+    }
+
+    // Step 3: Try querying the first folder
+    const testFolder = folders[0];
+    const cutoffDate = new Date(Date.now() - settings.minMessageAgeMinutes * 60 * 1000);
+
+    let queryResult;
+    try {
+      queryResult = await messenger.messages.query({
+        folderId: testFolder.id,
+        toDate: cutoffDate,
+      });
+      report.steps.push({
+        step: "Query test folder",
+        folder: testFolder.name,
+        messagesReturned: (queryResult.messages || []).length,
+        hasMorePages: !!queryResult.id,
+      });
+    } catch (e) {
+      report.steps.push({
+        step: "Query FAILED",
+        folder: testFolder.name,
+        error: e.message,
+      });
+
+      // Try messages.list as fallback test
+      try {
+        const listResult = await messenger.messages.list(testFolder.id);
+        report.steps.push({
+          step: "list() fallback test",
+          folder: testFolder.name,
+          messagesReturned: (listResult.messages || []).length,
+          hasMorePages: !!listResult.id,
+        });
+      } catch (e2) {
+        report.steps.push({
+          step: "list() also FAILED",
+          error: e2.message,
+        });
+      }
+      return report;
+    }
+
+    // Step 4: Sample a few messages and show their metadata
+    const sampleMessages = (queryResult.messages || []).slice(0, 5);
+    const rules = await getRules();
+    const enabledRules = rules.filter((r) => r.enabled);
+
+    report.steps.push({
+      step: "Enabled rules",
+      rules: enabledRules.map((r) => ({ id: r.id, name: r.name, priority: r.priority, type: r.expiration.type })),
+    });
+
+    for (const msg of sampleMessages) {
+      const sample = {
+        step: "Sample message",
+        id: msg.id,
+        subject: (msg.subject || "").substring(0, 60),
+        author: msg.author,
+        date: msg.date,
+        age: Math.round((Date.now() - new Date(msg.date).getTime()) / 3600000) + "h",
+      };
+      report.steps.push(sample);
+    }
+
+  } catch (e) {
+    report.steps.push({ step: "Diagnostic error", error: e.message, stack: e.stack });
+  }
+
+  return report;
+}
+
+// ── Smart cache invalidation when rules change ──────────────────────────────
+
+/**
+ * Build a fingerprint of the enabled rules' static match criteria.
+ * LLM-only fields (prompts, LLM settings) are excluded so that editing
+ * an LLM rule or changing AI config doesn't force a full rescan.
+ */
+function computeRulesFingerprint(rules) {
+  const parts = rules
+    .filter((r) => r.enabled)
+    .sort((a, b) => a.priority - b.priority)
+    .map((r) => {
+      const m = r.match || {};
+      return [
+        r.id,
+        r.enabled,
+        r.expiration.type,
+        r.expiration.hours || "",
+        r.expiration.pattern || "",
+        (m.senderPatterns || []).join("|"),
+        (m.subjectPatterns || []).join("|"),
+        (m.folders || []).join("|"),
+        JSON.stringify(m.headerMatch || {}),
+      ].join(":");
+    });
+  return parts.join("\n");
+}
+
+messenger.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.mailreaper_rules) {
+    const oldFingerprint = currentRulesFingerprint;
+    // Fingerprint will be recomputed on next scan; clear it to force recompute
+    currentRulesFingerprint = null;
+
+    if (oldFingerprint !== null) {
+      evaluatedNoMatch.clear();
+      console.log("[MailReaper] Rules changed, cleared evaluation cache");
+    }
+  }
+});
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
