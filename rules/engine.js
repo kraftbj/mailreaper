@@ -11,20 +11,40 @@ import { analyzeMesageWithLlm } from "../llm/adapter.js";
  * Evaluate a single message against all enabled rules (in priority order).
  * Returns the first matching verdict, or null if no rule matches.
  *
+ * fullMessage and bodyText are fetched lazily — only when a rule needs them.
+ *
  * @param {object} message - Thunderbird MessageHeader object
- * @param {object} fullMessage - Result of messages.getFull() (for headers/body)
- * @param {object} bodyText - Plain text body content
+ * @param {function} getFullMessage - async function returning messages.getFull() result
+ * @param {function} getBodyText - async function returning plain text body
  * @returns {Promise<object|null>} Verdict or null
  */
-export async function evaluateMessage(message, fullMessage, bodyText) {
+export async function evaluateMessage(message, getFullMessage, getBodyText) {
   const rules = await getRules();
   const settings = await getSettings();
   const enabledRules = rules
     .filter((r) => r.enabled)
     .sort((a, b) => a.priority - b.priority);
 
+  // Cache lazy fetches so they're only called once per message
+  let fullMessage = undefined;
+  let bodyText = undefined;
+
+  async function lazyFull() {
+    if (fullMessage === undefined) {
+      fullMessage = await getFullMessage();
+    }
+    return fullMessage;
+  }
+
+  async function lazyBody() {
+    if (bodyText === undefined) {
+      bodyText = await getBodyText();
+    }
+    return bodyText;
+  }
+
   for (const rule of enabledRules) {
-    // Check if message matches this rule's criteria
+    // Check if message matches this rule's criteria (uses only MessageHeader data)
     if (!matchesRule(message, rule)) {
       continue;
     }
@@ -32,8 +52,8 @@ export async function evaluateMessage(message, fullMessage, bodyText) {
     // Evaluate expiration based on rule type
     const verdict = await evaluateExpiration(
       message,
-      fullMessage,
-      bodyText,
+      lazyFull,
+      lazyBody,
       rule,
       settings
     );
@@ -47,7 +67,8 @@ export async function evaluateMessage(message, fullMessage, bodyText) {
 }
 
 /**
- * Check if a message matches a rule's criteria (sender, subject, folder, headers).
+ * Check if a message matches a rule's criteria (sender, subject, folder).
+ * Only uses data from the MessageHeader — no expensive API calls needed.
  */
 function matchesRule(message, rule) {
   const { match } = rule;
@@ -59,12 +80,15 @@ function matchesRule(message, rule) {
     }
   }
 
-  // Sender patterns
+  // Sender patterns — match against both the full author string
+  // ("Display Name <email@example.com>") and the extracted email address
   if (match.senderPatterns && match.senderPatterns.length > 0) {
-    const sender = (message.author || "").toLowerCase();
-    const senderMatch = match.senderPatterns.some((pattern) =>
-      globMatch(sender, pattern.toLowerCase())
-    );
+    const authorRaw = (message.author || "").toLowerCase();
+    const emailOnly = extractEmail(authorRaw);
+    const senderMatch = match.senderPatterns.some((pattern) => {
+      const p = pattern.toLowerCase();
+      return globMatch(authorRaw, p) || (emailOnly && globMatch(emailOnly, p));
+    });
     if (!senderMatch) return false;
   }
 
@@ -77,24 +101,24 @@ function matchesRule(message, rule) {
     if (!subjectMatch) return false;
   }
 
-  // Header match (special case for Expires header)
-  if (match.headerMatch && Object.keys(match.headerMatch).length > 0) {
-    // Header matching requires fullMessage, handled in evaluateExpiration
-    // For now, we pass — the expiration evaluator will check
-  }
+  // Rules that only have headerMatch and no sender/subject patterns
+  // (like the Expires header rule) match all messages — the header check
+  // happens in evaluateExpiration where we lazily fetch full headers.
 
   return true;
 }
 
 /**
  * Evaluate whether a message has expired based on the rule's expiration type.
+ * Only fetches fullMessage/bodyText when the rule type actually needs it.
  */
-async function evaluateExpiration(message, fullMessage, bodyText, rule, settings) {
+async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
   const now = new Date();
   const sentDate = new Date(message.date);
 
   switch (rule.expiration.type) {
     case "ttl": {
+      // TTL only needs the send date — no full message fetch needed
       const ttlMs = rule.expiration.hours * 60 * 60 * 1000;
       const expiresAt = new Date(sentDate.getTime() + ttlMs);
       if (now > expiresAt) {
@@ -110,6 +134,8 @@ async function evaluateExpiration(message, fullMessage, bodyText, rule, settings
     }
 
     case "header": {
+      // Need full message to read the Expires header
+      const fullMessage = await lazyFull();
       const expiresHeader = getHeader(fullMessage, "Expires");
       if (!expiresHeader) return null;
 
@@ -133,6 +159,7 @@ async function evaluateExpiration(message, fullMessage, bodyText, rule, settings
     }
 
     case "content-regex": {
+      const bodyText = await lazyBody();
       if (!bodyText || !rule.expiration.pattern) return null;
 
       try {
@@ -162,6 +189,7 @@ async function evaluateExpiration(message, fullMessage, bodyText, rule, settings
       }
 
       // Check cache first using Message-ID header
+      const fullMessage = await lazyFull();
       const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId;
       if (messageIdHeader) {
         const cached = await getCachedVerdict(messageIdHeader);
@@ -175,6 +203,7 @@ async function evaluateExpiration(message, fullMessage, bodyText, rule, settings
 
       // Call LLM
       try {
+        const bodyText = await lazyBody();
         const snippet = settings.llmMetadataOnly
           ? null
           : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
@@ -256,4 +285,12 @@ function globMatch(str, pattern) {
   }
 }
 
-export { globMatch, getHeader };
+/**
+ * Extract the email address from a "Display Name <email>" string.
+ */
+function extractEmail(author) {
+  const match = author.match(/<([^>]+)>/);
+  return match ? match[1] : author;
+}
+
+export { globMatch, getHeader, extractEmail };
