@@ -29,12 +29,23 @@ async function loadStatus() {
     }
 
     // Stats
-    document.getElementById("statExpired").textContent =
-      status.lastScanResults?.expired ?? "—";
-    document.getElementById("statProcessed").textContent =
-      status.lastScanResults?.processed ?? "—";
-    document.getElementById("statErrors").textContent =
-      status.lastScanResults?.errors ?? "—";
+    const results = status.lastScanResults || {};
+    document.getElementById("statExpired").textContent = results.expired ?? "—";
+    document.getElementById("statProcessed").textContent = results.processed ?? "—";
+    document.getElementById("statErrors").textContent = results.errors ?? "—";
+
+    // Progress bar
+    const progressEl = document.getElementById("scanProgress");
+    if (status.scanInProgress && results.totalCandidates > 0) {
+      progressEl.style.display = "block";
+      const pct = Math.round((results.processed / results.totalCandidates) * 100);
+      document.getElementById("progressBar").style.width = pct + "%";
+      const skippedText = results.skipped > 0 ? ` (${results.skipped} cached)` : "";
+      document.getElementById("progressText").textContent =
+        `${results.processed} / ${results.totalCandidates}${skippedText}`;
+    } else {
+      progressEl.style.display = "none";
+    }
 
     // Last scan
     if (status.lastScanTime) {

@@ -84,11 +84,13 @@ async function runScan() {
   let processed = 0;
   let expired = 0;
   let errors = 0;
+  let totalCandidates = 0;
+  let skipped = 0;
 
   // Update results in real-time so the popup always reflects progress
   function updateProgress() {
     lastScanTime = new Date().toISOString();
-    lastScanResults = { processed, expired, errors };
+    lastScanResults = { processed, expired, errors, totalCandidates, skipped };
   }
 
   try {
@@ -131,18 +133,21 @@ async function runScan() {
 
       try {
         const candidates = await getCandidateMessages(folder, cutoffDate, settings);
+        totalCandidates += candidates.length;
+        updateProgress();
 
         for (const message of candidates) {
           if (processed >= settings.maxMessagesPerScan) break;
           processed++;
-
-          // Update progress every 50 messages
-          if (processed % 50 === 0) updateProgress();
+          updateProgress();
 
           try {
             // Skip messages we've already evaluated with no match
             // under the current rules fingerprint
-            if (evaluatedNoMatch.get(message.id) === fingerprint) continue;
+            if (evaluatedNoMatch.get(message.id) === fingerprint) {
+              skipped++;
+              continue;
+            }
 
             // Evaluate against rules — full message data is fetched lazily
             // only when a rule actually needs it (e.g. Expires header, LLM)

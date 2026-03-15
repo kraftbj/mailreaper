@@ -188,10 +188,20 @@
     <span id="statusDot" class="status-dot inactive"></span>
   </div>
 
+  <div id="scanProgress" style="display:none; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--border);">
+    <div style="display:flex; justify-content:space-between; margin-bottom: 4px;">
+      <span>Scanning...</span>
+      <span id="progressText">0 / 0</span>
+    </div>
+    <div style="background: var(--border); border-radius: 3px; height: 4px; overflow: hidden;">
+      <div id="progressBar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.3s;"></div>
+    </div>
+  </div>
+
   <div class="stats">
     <div class="stat">
       <div class="stat-value" id="statExpired">—</div>
-      <div class="stat-label">Expired Today</div>
+      <div class="stat-label">Expired</div>
     </div>
     <div class="stat">
       <div class="stat-value" id="statProcessed">—</div>
