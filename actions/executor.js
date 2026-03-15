@@ -208,7 +208,8 @@ export async function cleanupGracePeriod() {
 // ── Folder Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Find or create the "Expired" subfolder under the account's root.
+ * Find or create the "Expired" folder for an account.
+ * Tries root level first, then under a "Folders" parent (Proton Mail).
  */
 async function getOrCreateExpiredFolder(accountId) {
   // Check cache
@@ -216,17 +217,47 @@ async function getOrCreateExpiredFolder(accountId) {
     return expiredFolderCache.get(accountId);
   }
 
-  // Look for existing folder
+  // Look for existing folder anywhere in the tree
   let folder = await findExpiredFolder(accountId);
 
   if (!folder) {
-    // Create it
+    // Try creating at root level first
+    const account = await messenger.accounts.get(accountId, true);
+    if (!account) return null;
+
+    const rootFolders = account.rootFolder?.subFolders || [];
+
+    // Some providers (Proton Mail) organize user folders under a "Folders" parent
+    const foldersParent = rootFolders.find((f) =>
+      f.name === "Folders" || f.name === "Labels"
+    );
+
+    const parentId = foldersParent ? foldersParent.id : account.rootFolder?.id;
+
+    if (!parentId) {
+      console.error("[MailReaper] Cannot determine parent folder for Expired folder");
+      return null;
+    }
+
     try {
-      folder = await messenger.folders.create(accountId, EXPIRED_FOLDER_NAME);
-      console.log(`[MailReaper] Created "${EXPIRED_FOLDER_NAME}" folder for account ${accountId}`);
+      folder = await messenger.folders.create(parentId, EXPIRED_FOLDER_NAME);
+      console.log(`[MailReaper] Created "${EXPIRED_FOLDER_NAME}" folder under ${foldersParent ? foldersParent.name : "root"}`);
     } catch (e) {
       console.error(`[MailReaper] Failed to create Expired folder:`, e);
-      return null;
+
+      // If root failed and there's a Folders parent we didn't try, try that
+      if (!foldersParent && account.rootFolder?.id) {
+        // Try creating under root folder ID directly
+        try {
+          folder = await messenger.folders.create(account.rootFolder.id, EXPIRED_FOLDER_NAME);
+          console.log(`[MailReaper] Created "${EXPIRED_FOLDER_NAME}" folder (fallback)`);
+        } catch (e2) {
+          console.error(`[MailReaper] Fallback folder creation also failed:`, e2);
+          return null;
+        }
+      } else {
+        return null;
+      }
     }
   }
 
@@ -239,14 +270,14 @@ async function getOrCreateExpiredFolder(accountId) {
 }
 
 /**
- * Find the Expired folder in an account's folder tree.
+ * Find the Expired folder anywhere in an account's folder tree.
  */
 async function findExpiredFolder(accountId) {
   try {
     const account = await messenger.accounts.get(accountId, true);
-    if (!account || !account.folders) return null;
+    if (!account || !account.rootFolder) return null;
 
-    return findFolderByName(account.folders, EXPIRED_FOLDER_NAME);
+    return findFolderByName(account.rootFolder.subFolders || [], EXPIRED_FOLDER_NAME);
   } catch (e) {
     console.error(`[MailReaper] Error finding expired folder:`, e);
     return null;
@@ -254,11 +285,15 @@ async function findExpiredFolder(accountId) {
 }
 
 /**
- * Recursively search folder tree by name (top-level only for now).
+ * Recursively search folder tree by name.
  */
 function findFolderByName(folders, name) {
   for (const folder of folders) {
     if (folder.name === name) return folder;
+    if (folder.subFolders && folder.subFolders.length > 0) {
+      const found = findFolderByName(folder.subFolders, name);
+      if (found) return found;
+    }
   }
   return null;
 }
