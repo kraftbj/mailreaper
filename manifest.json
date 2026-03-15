@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "default_locale": "en",
   "name": "MailReaper",
   "description": "AI-powered email expiration manager. Automatically identifies and cleans up time-sensitive emails that have passed their useful life.",
   "version": "0.1.0",
@@ -15,6 +16,9 @@
     "storage",
     "alarms",
     "notifications"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "action": {
     "default_title": "MailReaper",
