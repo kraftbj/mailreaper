@@ -182,11 +182,16 @@ document.getElementById("ruleExpirationType").addEventListener("change", updateE
 
 function updateExpirationFields() {
   const type = document.getElementById("ruleExpirationType").value;
+  const isClassify = type === "classify" || type === "llm-classify";
   document.getElementById("fieldTtlHours").hidden = type !== "ttl";
   document.getElementById("fieldRegex").hidden = type !== "content-regex";
   document.getElementById("fieldLlmPrompt").hidden = type !== "llm" && type !== "llm-classify";
-  document.getElementById("fieldClassifyFolder").hidden = type !== "classify" && type !== "llm-classify";
+  document.getElementById("fieldClassifyFolder").hidden = !isClassify;
   document.getElementById("fieldClassifyCategory").hidden = type !== "llm-classify";
+  document.getElementById("ruleActionLabel").textContent = isClassify ? "When matched" : "When expired";
+  const actionSelect = document.getElementById("ruleAction");
+  actionSelect.options[0].textContent = isClassify ? "Move to folder" : "Move to Expired folder";
+  actionSelect.options[2].textContent = isClassify ? "Tag as classified" : "Tag as expired";
 }
 
 document.getElementById("btnSaveRule").addEventListener("click", async () => {
