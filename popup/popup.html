@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --bg-secondary: #16213e;
+      --text: #e0e0e0;
+      --text-muted: #8888aa;
+      --accent: #e74c3c;
+      --accent-green: #27ae60;
+      --border: #2a2a4a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .header img { width: 24px; height: 24px; }
+
+    .header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .status-dot.active { background: var(--accent-green); }
+    .status-dot.inactive { background: var(--text-muted); }
+    .status-dot.scanning { background: var(--accent); animation: pulse 1s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat {
+      background: var(--bg);
+      padding: 12px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .info-rows {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+
+    .info-row .label { color: var(--text-muted); }
+
+    .activity {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .activity h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .activity-item {
+      display: flex;
+      gap: 8px;
+      padding: 5px 0;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .activity-item:last-child { border: none; }
+
+    .activity-icon {
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .activity-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .activity-time {
+      color: var(--text-muted);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 16px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-secondary);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: var(--border); }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    button.primary:hover { background: #c0392b; }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="../icons/icon-32.svg" alt="">
+    <h1>MailReaper</h1>
+    <span id="statusDot" class="status-dot inactive"></span>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value" id="statExpired">—</div>
+      <div class="stat-label">Expired Today</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="statProcessed">—</div>
+      <div class="stat-label">Scanned</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="statErrors">—</div>
+      <div class="stat-label">Errors</div>
+    </div>
+  </div>
+
+  <div class="info-rows">
+    <div class="info-row">
+      <span class="label">Last scan</span>
+      <span id="lastScan">Never</span>
+    </div>
+    <div class="info-row">
+      <span class="label">Next scan</span>
+      <span id="nextScan">—</span>
+    </div>
+    <div class="info-row">
+      <span class="label">LLM Provider</span>
+      <span id="llmProvider">None</span>
+    </div>
+  </div>
+
+  <div class="activity">
+    <h3>Recent Activity</h3>
+    <div id="activityList">
+      <div class="empty-state">No activity yet</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="btnScan">Scan Now</button>
+    <button id="btnSettings">Settings</button>
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+/**
+ * Default rules bundled with MailReaper.
+ * Users can disable/modify these. They serve as examples and handle common cases.
+ */
+export const DEFAULT_RULES = [
+  {
+    id: "builtin-otp-codes",
+    name: "One-time codes & verification emails",
+    enabled: true,
+    priority: 10,
+    match: {
+      folders: [], // empty = all scanned folders
+      senderPatterns: [],
+      subjectPatterns: [
+        "*verification code*",
+        "*verify your*",
+        "*one-time*",
+        "*OTP*",
+        "*login code*",
+        "*security code*",
+        "*confirm your email*",
+        "*authentication code*",
+        "*two-factor*",
+        "*2FA*",
+        "*sign-in code*",
+        "*passcode*",
+      ],
+      headerMatch: {},
+    },
+    expiration: { type: "ttl", hours: 1 },
+    action: "move",
+    destination: null, // null = use default expired folder
+    tag: null,
+    gracePeriodDays: 0,
+    builtin: true,
+  },
+  {
+    id: "builtin-shipping-delivered",
+    name: "Package delivery confirmations",
+    enabled: true,
+    priority: 20,
+    match: {
+      folders: [],
+      senderPatterns: [
+        "*@ups.com",
+        "*@fedex.com",
+        "*@usps.com",
+        "*@dhl.com",
+        "*@amazonses.com",
+        "*@amazon.com",
+      ],
+      subjectPatterns: [
+        "*delivered*",
+        "*has been delivered*",
+        "*was delivered*",
+      ],
+      headerMatch: {},
+    },
+    expiration: { type: "ttl", hours: 72 },
+    action: "move",
+    destination: null,
+    tag: null,
+    gracePeriodDays: 7,
+    builtin: true,
+  },
+  {
+    id: "builtin-transit-alerts",
+    name: "Transit delay & service alerts",
+    enabled: false, // Disabled by default — user enables if relevant
+    priority: 15,
+    match: {
+      folders: [],
+      senderPatterns: [
+        "*@capmetro.org",
+        "*@transitapp.com",
+        "*@metro.net",
+        "*@mta.info",
+        "*@bart.gov",
+      ],
+      subjectPatterns: [
+        "*delay*",
+        "*service alert*",
+        "*disruption*",
+        "*suspended*",
+        "*detour*",
+      ],
+      headerMatch: {},
+    },
+    expiration: { type: "ttl", hours: 2 },
+    action: "move",
+    destination: null,
+    tag: null,
+    gracePeriodDays: 1,
+    builtin: true,
+  },
+  {
+    id: "builtin-calendar-reminders",
+    name: "Calendar event reminders",
+    enabled: true,
+    priority: 25,
+    match: {
+      folders: [],
+      senderPatterns: [
+        "*calendar-notification*@google.com",
+        "*@calendly.com",
+      ],
+      subjectPatterns: [
+        "*reminder:*",
+        "*starts in*",
+        "*upcoming event*",
+      ],
+      headerMatch: {},
+    },
+    expiration: { type: "ttl", hours: 24 },
+    action: "move",
+    destination: null,
+    tag: null,
+    gracePeriodDays: 1,
+    builtin: true,
+  },
+  {
+    id: "builtin-expires-header",
+    name: "Emails with Expires header (RFC standard)",
+    enabled: true,
+    priority: 1, // Highest priority — if sender set it, honor it
+    match: {
+      folders: [],
+      senderPatterns: [],
+      subjectPatterns: [],
+      headerMatch: { "Expires": "*" }, // Any value = header is present
+    },
+    expiration: { type: "header" },
+    action: "move",
+    destination: null,
+    tag: null,
+    gracePeriodDays: 3,
+    builtin: true,
+  },
+  {
+    id: "builtin-llm-promo-scanner",
+    name: "AI: Scan promotions for deadlines",
+    enabled: false, // Disabled until LLM is configured
+    priority: 100, // Low priority — only if no static rule matched
+    match: {
+      folders: [], // User should set to their promo/deals folder
+      senderPatterns: [],
+      subjectPatterns: [
+        "*sale*",
+        "*% off*",
+        "*discount*",
+        "*limited time*",
+        "*ends*",
+        "*expires*",
+        "*last chance*",
+        "*final hours*",
+        "*today only*",
+        "*flash*",
+        "*clearance*",
+        "*coupon*",
+        "*deal*",
+      ],
+      headerMatch: {},
+    },
+    expiration: { type: "llm" },
+    action: "move",
+    destination: null,
+    tag: null,
+    gracePeriodDays: 3,
+    builtin: true,
+  },
+];

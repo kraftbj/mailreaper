@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MailReaper Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-content">
+        <img src="../icons/icon-48.svg" alt="" class="logo">
+        <div>
+          <h1>MailReaper</h1>
+          <p class="subtitle">AI-Powered Email Expiration Manager</p>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="general">General</button>
+      <button class="tab" data-tab="rules">Rules</button>
+      <button class="tab" data-tab="llm">AI / LLM</button>
+      <button class="tab" data-tab="folders">Folders</button>
+      <button class="tab" data-tab="activity">Activity Log</button>
+    </nav>
+
+    <!-- ── General Tab ─────────────────────────────────────────────── -->
+    <section id="tab-general" class="tab-content active">
+      <div class="card">
+        <h2>Scan Behavior</h2>
+
+        <div class="field">
+          <label>
+            <input type="checkbox" id="scanEnabled">
+            Enable automatic scanning
+          </label>
+        </div>
+
+        <div class="field">
+          <label for="scanInterval">Scan interval (minutes)</label>
+          <input type="number" id="scanInterval" min="5" max="1440" step="5">
+          <p class="hint">How often MailReaper checks for expired emails.</p>
+        </div>
+
+        <div class="field">
+          <label for="minAge">Minimum message age (minutes)</label>
+          <input type="number" id="minAge" min="5" max="1440" step="5">
+          <p class="hint">Skip messages newer than this to avoid false positives on just-arrived mail.</p>
+        </div>
+
+        <div class="field">
+          <label for="maxPerScan">Max messages per scan</label>
+          <input type="number" id="maxPerScan" min="10" max="1000" step="10">
+          <p class="hint">Rate limit to avoid UI freezes and excessive LLM calls.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Actions</h2>
+
+        <div class="field">
+          <label for="gracePeriod">Default grace period (days)</label>
+          <input type="number" id="gracePeriod" min="0" max="90" step="1">
+          <p class="hint">How long expired messages stay in the Expired folder before permanent deletion.</p>
+        </div>
+
+        <div class="field">
+          <label>
+            <input type="checkbox" id="graceCleanup">
+            Enable automatic grace period cleanup
+          </label>
+          <p class="hint">Permanently delete messages from the Expired folder after the grace period.</p>
+        </div>
+
+        <div class="field">
+          <label>
+            <input type="checkbox" id="notifyExpiration">
+            Show notification when emails are expired
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnSaveGeneral" class="btn primary">Save Settings</button>
+        <span id="saveStatus" class="save-status"></span>
+      </div>
+    </section>
+
+    <!-- ── Rules Tab ───────────────────────────────────────────────── -->
+    <section id="tab-rules" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <h2>Expiration Rules</h2>
+          <div class="card-actions">
+            <button id="btnAddRule" class="btn small">+ Add Rule</button>
+            <button id="btnResetRules" class="btn small danger">Reset to Defaults</button>
+          </div>
+        </div>
+        <p class="hint" style="margin-bottom: 12px;">
+          Rules are evaluated in priority order (top to bottom). First matching rule wins.
+          Drag to reorder.
+        </p>
+
+        <div id="rulesList" class="rules-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Rule Editor Modal -->
+      <div id="ruleEditor" class="modal" hidden>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 id="ruleEditorTitle">Edit Rule</h3>
+            <button class="btn-close" id="btnCloseEditor">&times;</button>
+          </div>
+
+          <div class="field">
+            <label for="ruleName">Rule name</label>
+            <input type="text" id="ruleName" placeholder="e.g., Transit delay alerts">
+          </div>
+
+          <div class="field">
+            <label>
+              <input type="checkbox" id="ruleEnabled" checked>
+              Enabled
+            </label>
+          </div>
+
+          <h4>Matching Criteria</h4>
+
+          <div class="field">
+            <label for="ruleSenderPatterns">Sender patterns (one per line, use * for wildcards)</label>
+            <textarea id="ruleSenderPatterns" rows="3" placeholder="*@capmetro.org&#10;*@transitapp.com"></textarea>
+          </div>
+
+          <div class="field">
+            <label for="ruleSubjectPatterns">Subject patterns (one per line)</label>
+            <textarea id="ruleSubjectPatterns" rows="3" placeholder="*delay*&#10;*service alert*"></textarea>
+          </div>
+
+          <h4>Expiration</h4>
+
+          <div class="field">
+            <label for="ruleExpirationType">Type</label>
+            <select id="ruleExpirationType">
+              <option value="ttl">Fixed TTL (time after send)</option>
+              <option value="header">Expires header (RFC standard)</option>
+              <option value="llm">AI analysis (LLM)</option>
+              <option value="content-regex">Content regex</option>
+            </select>
+          </div>
+
+          <div class="field" id="fieldTtlHours">
+            <label for="ruleTtlHours">TTL (hours)</label>
+            <input type="number" id="ruleTtlHours" min="0.5" max="8760" step="0.5" value="2">
+          </div>
+
+          <div class="field" id="fieldRegex" hidden>
+            <label for="ruleRegex">Regex pattern (must have a capture group for the date)</label>
+            <input type="text" id="ruleRegex" placeholder="expires?\s*:?\s*(\d{4}-\d{2}-\d{2})">
+          </div>
+
+          <div class="field" id="fieldLlmPrompt" hidden>
+            <label for="ruleLlmPrompt">Custom LLM prompt (optional — leave blank for default)</label>
+            <textarea id="ruleLlmPrompt" rows="4" placeholder="Leave blank to use the default analysis prompt."></textarea>
+          </div>
+
+          <h4>Action</h4>
+
+          <div class="field">
+            <label for="ruleAction">When expired</label>
+            <select id="ruleAction">
+              <option value="move">Move to Expired folder</option>
+              <option value="delete">Delete (move to trash)</option>
+              <option value="tag">Tag as expired</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="ruleGracePeriod">Grace period (days, 0 = delete immediately)</label>
+            <input type="number" id="ruleGracePeriod" min="0" max="90" step="1" value="7">
+          </div>
+
+          <div class="modal-footer">
+            <button id="btnSaveRule" class="btn primary">Save Rule</button>
+            <button id="btnDeleteRule" class="btn danger">Delete</button>
+            <button id="btnCancelRule" class="btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── LLM Tab ─────────────────────────────────────────────────── -->
+    <section id="tab-llm" class="tab-content">
+      <div class="card">
+        <h2>AI Provider</h2>
+        <p class="hint" style="margin-bottom: 12px;">
+          An LLM is used to analyze email content for time-sensitive deadlines.
+          It's only called for rules with "AI analysis" expiration type.
+        </p>
+
+        <div class="field">
+          <label for="llmProvider">Provider</label>
+          <select id="llmProvider">
+            <option value="none">None (static rules only)</option>
+            <option value="gemini">Google Gemini (cloud)</option>
+            <option value="ollama">Ollama (local/self-hosted)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="geminiSettings" class="card" hidden>
+        <h2>Gemini Settings</h2>
+
+        <div class="field">
+          <label for="geminiApiKey">API Key</label>
+          <input type="password" id="geminiApiKey" placeholder="AIza...">
+          <p class="hint">Get a key at <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a>.</p>
+        </div>
+
+        <div class="field">
+          <label for="geminiModel">Model</label>
+          <select id="geminiModel">
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash (stable, cheapest)</option>
+            <option value="gemini-3-flash-preview">Gemini 3 Flash (preview, smarter)</option>
+            <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite (fastest)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="ollamaSettings" class="card" hidden>
+        <h2>Ollama Settings</h2>
+
+        <div class="field">
+          <label for="ollamaEndpoint">Endpoint URL</label>
+          <input type="text" id="ollamaEndpoint" placeholder="http://localhost:11434">
+          <p class="hint">The URL of your Ollama instance. Can be a Tailscale address for remote servers.</p>
+        </div>
+
+        <div class="field">
+          <label for="ollamaModel">Model</label>
+          <input type="text" id="ollamaModel" placeholder="llama3.2:3b">
+          <p class="hint">Small models (3B-8B) work well for this classification task.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Privacy Controls</h2>
+
+        <div class="field">
+          <label>
+            <input type="checkbox" id="llmMetadataOnly">
+            Metadata only mode (don't send email body to LLM)
+          </label>
+          <p class="hint">Less accurate, but only sender, subject, and date are shared. Recommended for cloud providers on sensitive accounts.</p>
+        </div>
+
+        <div class="field">
+          <label for="llmMaxSnippet">Max body snippet length (characters)</label>
+          <input type="number" id="llmMaxSnippet" min="100" max="10000" step="100">
+          <p class="hint">Longer = more accurate, but more data sent and higher cost.</p>
+        </div>
+
+        <div class="field">
+          <label for="llmConfidence">Minimum confidence threshold</label>
+          <input type="range" id="llmConfidence" min="0.5" max="0.99" step="0.05">
+          <span id="llmConfidenceValue">0.7</span>
+          <p class="hint">Higher = fewer false positives but may miss some expired emails.</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnTestLlm" class="btn">Test Connection</button>
+        <button id="btnSaveLlm" class="btn primary">Save LLM Settings</button>
+        <span id="llmSaveStatus" class="save-status"></span>
+      </div>
+    </section>
+
+    <!-- ── Folders Tab ─────────────────────────────────────────────── -->
+    <section id="tab-folders" class="tab-content">
+      <div class="card">
+        <h2>Folders to Scan</h2>
+        <p class="hint" style="margin-bottom: 12px;">
+          Select which folders MailReaper should check for expired emails.
+          If none are selected, only Inbox folders will be scanned.
+        </p>
+
+        <div id="folderTree" class="folder-tree">
+          <p class="hint">Loading folders...</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnSaveFolders" class="btn primary">Save Folder Settings</button>
+        <span id="folderSaveStatus" class="save-status"></span>
+      </div>
+    </section>
+
+    <!-- ── Activity Log Tab ────────────────────────────────────────── -->
+    <section id="tab-activity" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <h2>Activity Log</h2>
+          <button id="btnClearLog" class="btn small danger">Clear Log</button>
+        </div>
+
+        <div id="activityTable" class="activity-table">
+          <p class="hint">Loading...</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="options.js" type="module"></script>
+</body>
+</html>

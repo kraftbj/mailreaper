@@ -1,0 +1,10 @@
+{
+  "extensionName": {
+    "message": "MailReaper",
+    "description": "Name of the extension"
+  },
+  "extensionDescription": {
+    "message": "AI-powered email expiration manager. Automatically identifies and cleans up time-sensitive emails that have passed their useful life.",
+    "description": "Description of the extension"
+  }
+}

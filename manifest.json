@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "MailReaper",
+  "description": "AI-powered email expiration manager. Automatically identifies and cleans up time-sensitive emails that have passed their useful life.",
+  "version": "0.1.0",
+  "author": "Brandon Kraft",
+  "homepage_url": "https://dillo.dev/mailreaper",
+  "permissions": [
+    "accountsRead",
+    "accountsFolders",
+    "messagesRead",
+    "messagesMove",
+    "messagesDelete",
+    "messagesTags",
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "action": {
+    "default_title": "MailReaper",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.svg",
+      "32": "icons/icon-32.svg",
+      "48": "icons/icon-48.svg"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.svg",
+    "32": "icons/icon-32.svg",
+    "48": "icons/icon-48.svg",
+    "128": "icons/icon-128.svg"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mailreaper@dillo.dev",
+      "strict_min_version": "128.0"
+    }
+  }
+}
