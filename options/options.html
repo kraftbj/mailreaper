@@ -148,6 +148,8 @@
               <option value="header">Expires header (RFC standard)</option>
               <option value="llm">AI analysis (LLM)</option>
               <option value="content-regex">Content regex</option>
+              <option value="classify">Classify (move to folder)</option>
+              <option value="llm-classify">AI classification</option>
             </select>
           </div>
 
@@ -164,6 +166,20 @@
           <div class="field" id="fieldLlmPrompt" hidden>
             <label for="ruleLlmPrompt">Custom LLM prompt (optional — leave blank for default)</label>
             <textarea id="ruleLlmPrompt" rows="4" placeholder="Leave blank to use the default analysis prompt."></textarea>
+          </div>
+
+          <div class="field" id="fieldClassifyFolder" hidden>
+            <label for="ruleClassifyFolder">Destination folder name</label>
+            <input type="text" id="ruleClassifyFolder" placeholder="Paper-Trail">
+            <p class="hint">Folder will be created automatically if it doesn't exist.</p>
+          </div>
+
+          <div class="field" id="fieldClassifyCategory" hidden>
+            <label for="ruleClassifyCategory">Classification category</label>
+            <select id="ruleClassifyCategory">
+              <option value="receipt">Receipts & statements</option>
+            </select>
+            <p class="hint">What type of email the AI should look for.</p>
           </div>
 
           <h4>Action</h4>
