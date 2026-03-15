@@ -5,7 +5,7 @@
  */
 
 import { getRules, getSettings, getCachedVerdict, setCachedVerdict } from "./storage.js";
-import { analyzeMesageWithLlm } from "../llm/adapter.js";
+import { analyzeMesageWithLlm, classifyMessageWithLlm } from "../llm/adapter.js";
 
 /**
  * Evaluate a single message against all enabled rules (in priority order).
@@ -244,6 +244,65 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         }
       } catch (e) {
         console.error(`[MailReaper] LLM analysis failed for message ${message.id}:`, e);
+      }
+      return null;
+    }
+
+    case "classify": {
+      return {
+        classified: true,
+        rule,
+        reason: rule.name,
+        confidence: 1.0,
+      };
+    }
+
+    case "llm-classify": {
+      if (settings.llmProvider === "none") return null;
+
+      const fullMessage = await lazyFull();
+      const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId;
+      if (messageIdHeader) {
+        const cached = await getCachedVerdict(messageIdHeader);
+        if (cached) {
+          if (cached.classified) return { ...cached, rule };
+          return null;
+        }
+      }
+
+      try {
+        const bodyText = await lazyBody();
+        const snippet = settings.llmMetadataOnly
+          ? null
+          : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
+
+        const llmResult = await classifyMessageWithLlm({
+          sender: message.author,
+          subject: message.subject,
+          sentDate: sentDate.toISOString(),
+          bodySnippet: snippet,
+          category: rule.expiration.category || "receipt",
+          customPrompt: rule.expiration.prompt || null,
+        }, settings);
+
+        if (messageIdHeader) {
+          await setCachedVerdict(messageIdHeader, {
+            classified: llmResult.matches,
+            reason: llmResult.reason,
+            confidence: llmResult.confidence,
+          });
+        }
+
+        if (llmResult.matches && llmResult.confidence >= settings.llmConfidenceThreshold) {
+          return {
+            classified: true,
+            rule,
+            reason: `LLM: ${llmResult.reason}`,
+            confidence: llmResult.confidence,
+          };
+        }
+      } catch (e) {
+        console.error(`[MailReaper] LLM classify failed for message ${message.id}:`, e);
       }
       return null;
     }
