@@ -3,7 +3,7 @@
  * Handles prompt construction, API calls, and response parsing.
  */
 
-import { buildAnalysisPrompt, buildRuleGenerationPrompt } from "./prompts.js";
+import { buildAnalysisPrompt, buildRuleGenerationPrompt, buildClassificationPrompt } from "./prompts.js";
 
 /**
  * Analyze a message for time-sensitive expiration using the configured LLM.
@@ -14,6 +14,26 @@ import { buildAnalysisPrompt, buildRuleGenerationPrompt } from "./prompts.js";
  */
 export async function analyzeMesageWithLlm(messageData, settings) {
   const prompt = buildAnalysisPrompt(messageData);
+
+  switch (settings.llmProvider) {
+    case "gemini":
+      return callGemini(prompt, settings);
+    case "ollama":
+      return callOllama(prompt, settings);
+    default:
+      throw new Error(`Unknown LLM provider: ${settings.llmProvider}`);
+  }
+}
+
+/**
+ * Classify a message using the configured LLM.
+ *
+ * @param {object} messageData - { sender, subject, sentDate, bodySnippet, category, customPrompt }
+ * @param {object} settings - Extension settings
+ * @returns {Promise<object>} { matches, reason, confidence }
+ */
+export async function classifyMessageWithLlm(messageData, settings) {
+  const prompt = buildClassificationPrompt(messageData);
 
   switch (settings.llmProvider) {
     case "gemini":
@@ -172,6 +192,8 @@ function parseJsonResponse(text) {
       expiresAt: parsed.expiresAt ?? parsed.expires_at ?? null,
       reason: String(parsed.reason ?? parsed.explanation ?? "No reason given"),
       confidence: Number(parsed.confidence ?? parsed.score ?? 0.5),
+      // For classification responses
+      ...(parsed.matches !== undefined && { matches: Boolean(parsed.matches) }),
       // For rule generation responses
       ...(parsed.name && { name: parsed.name }),
       ...(parsed.senderPatterns && { senderPatterns: parsed.senderPatterns }),

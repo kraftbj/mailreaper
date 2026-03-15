@@ -54,6 +54,55 @@ Classification guidelines:
 }
 
 /**
+ * Build the classification prompt for categorizing an email.
+ */
+export function buildClassificationPrompt(messageData) {
+  const { sender, subject, sentDate, bodySnippet, category, customPrompt } = messageData;
+
+  if (customPrompt) {
+    return customPrompt
+      .replace("{sender}", sender || "unknown")
+      .replace("{subject}", subject || "")
+      .replace("{sentDate}", sentDate || "")
+      .replace("{bodySnippet}", bodySnippet || "(no body content provided)");
+  }
+
+  const bodySection = bodySnippet
+    ? `\nContent snippet:\n---\n${bodySnippet}\n---`
+    : "\n(Body content not provided — analyze based on metadata only)";
+
+  const categoryDescriptions = {
+    receipt: "a purchase receipt, payment confirmation, order confirmation, invoice, billing statement, or financial transaction record",
+  };
+
+  const desc = categoryDescriptions[category] || category;
+
+  return `You are an email classifier. Determine if this email is ${desc}.
+
+Email metadata:
+- From: ${sender || "unknown"}
+- Subject: ${subject || "(no subject)"}
+- Sent: ${sentDate}
+${bodySection}
+
+Respond ONLY with a JSON object:
+{
+  "matches": true/false,
+  "reason": "brief 1-sentence explanation",
+  "confidence": 0.0 to 1.0
+}
+
+Guidelines:
+- Purchase receipts, order confirmations, payment confirmations → matches
+- Monthly/annual billing statements, subscription renewals → matches
+- Invoices, donation receipts, tax documents → matches
+- Shipping/delivery notifications → does NOT match (these are tracked separately)
+- Marketing emails from stores → does NOT match
+- Account alerts, password resets → does NOT match
+- Prefer false negatives over false positives — when in doubt, say false.`;
+}
+
+/**
  * Build a prompt for generating a rule from example emails.
  */
 export function buildRuleGenerationPrompt(examples) {
