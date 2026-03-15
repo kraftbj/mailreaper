@@ -164,7 +164,7 @@ async function runScan() {
               }
             );
 
-            if (verdict && verdict.expired) {
+            if (verdict && (verdict.expired || verdict.classified)) {
               await executeAction(message, verdict);
               expired++;
             } else if (!verdict) {
