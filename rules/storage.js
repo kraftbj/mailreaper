@@ -44,7 +44,8 @@ const DEFAULT_SETTINGS = {
 };
 
 /**
- * Initialize storage with defaults on first run.
+ * Initialize storage with defaults on first run, and merge new default
+ * patterns into existing built-in rules on every startup.
  */
 export async function initializeStorage() {
   const { [STORAGE_KEYS.INITIALIZED]: initialized } =
@@ -59,6 +60,52 @@ export async function initializeStorage() {
       [STORAGE_KEYS.INITIALIZED]: true,
     });
     console.log("[MailReaper] Storage initialized with defaults");
+  } else {
+    await mergeBuiltinRules();
+  }
+}
+
+/**
+ * Merge new patterns from DEFAULT_RULES into stored built-in rules.
+ * Adds any patterns from defaults that aren't already present, without
+ * removing user-added patterns. Also adds any new built-in rules that
+ * didn't exist before.
+ */
+async function mergeBuiltinRules() {
+  const rules = await getRules();
+  const defaultMap = new Map(DEFAULT_RULES.map((r) => [r.id, r]));
+  let changed = false;
+
+  for (const defaultRule of DEFAULT_RULES) {
+    const stored = rules.find((r) => r.id === defaultRule.id);
+
+    if (!stored) {
+      // New built-in rule — add it
+      rules.push(defaultRule);
+      changed = true;
+      console.log(`[MailReaper] Added new built-in rule: ${defaultRule.name}`);
+      continue;
+    }
+
+    if (!stored.builtin) continue;
+
+    // Merge match patterns (add new ones, keep existing)
+    for (const key of ["senderPatterns", "subjectPatterns"]) {
+      const defaultPatterns = defaultRule.match[key] || [];
+      const storedPatterns = stored.match[key] || [];
+      const storedSet = new Set(storedPatterns.map((p) => p.toLowerCase()));
+      const newPatterns = defaultPatterns.filter((p) => !storedSet.has(p.toLowerCase()));
+
+      if (newPatterns.length > 0) {
+        stored.match[key] = [...storedPatterns, ...newPatterns];
+        changed = true;
+        console.log(`[MailReaper] Merged ${newPatterns.length} new ${key} into rule "${stored.name}"`);
+      }
+    }
+  }
+
+  if (changed) {
+    await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: rules });
   }
 }
 
@@ -178,7 +225,10 @@ export async function clearActivityLog() {
 
 // ── LLM Cache ───────────────────────────────────────────────────────────────
 
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // Re-check after 24 hours
+// Expired verdicts are re-checked after 24h (in case something changed).
+// "Not time-sensitive" verdicts are cached for 30 days (they won't change).
+const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
+const CACHE_TTL_NOT_SENSITIVE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function getCachedVerdict(messageIdHeader) {
   const { [STORAGE_KEYS.LLM_CACHE]: cache } =
@@ -188,8 +238,10 @@ export async function getCachedVerdict(messageIdHeader) {
   const entry = cache[messageIdHeader];
   if (!entry) return null;
 
-  // Check if cache entry has expired
-  if (Date.now() - entry.cachedAt > CACHE_TTL_MS) {
+  const age = Date.now() - entry.cachedAt;
+  const ttl = entry.verdict?.expired ? CACHE_TTL_EXPIRED_MS : CACHE_TTL_NOT_SENSITIVE_MS;
+
+  if (age > ttl) {
     return null;
   }
 
@@ -206,11 +258,11 @@ export async function setCachedVerdict(messageIdHeader, verdict) {
     cachedAt: Date.now(),
   };
 
-  // Prune old entries (keep last 1000)
+  // Prune old entries (keep last 5000)
   const entries = Object.entries(updated);
-  if (entries.length > 1000) {
+  if (entries.length > 5000) {
     entries.sort((a, b) => b[1].cachedAt - a[1].cachedAt);
-    const pruned = Object.fromEntries(entries.slice(0, 1000));
+    const pruned = Object.fromEntries(entries.slice(0, 5000));
     await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: pruned });
   } else {
     await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: updated });
