@@ -8,19 +8,13 @@
 export function buildAnalysisPrompt(messageData) {
   const { sender, subject, sentDate, bodySnippet, customPrompt } = messageData;
 
-  if (customPrompt) {
-    // User-defined prompt with variable substitution
-    return customPrompt
-      .replace("{sender}", sender || "unknown")
-      .replace("{subject}", subject || "")
-      .replace("{sentDate}", sentDate || "")
-      .replace("{now}", new Date().toISOString())
-      .replace("{bodySnippet}", bodySnippet || "(no body content provided)");
-  }
-
   const bodySection = bodySnippet
     ? `\nContent snippet:\n---\n${bodySnippet}\n---`
     : "\n(Body content not provided — analyze based on metadata only)";
+
+  const customSection = customPrompt
+    ? `\n\nAdditional user-provided guidelines (these take priority):\n${customPrompt}`
+    : "";
 
   return `You are an email expiration classifier. Your job is to determine if an email contains time-sensitive content that has already expired.
 
@@ -50,7 +44,7 @@ Classification guidelines:
 - Personal correspondence → NOT time-sensitive.
 - Receipts, order confirmations → NOT time-sensitive (user may need for returns).
 - If you cannot determine an expiration with reasonable confidence, set isTimeSensitive to false.
-- Prefer false negatives over false positives — when in doubt, don't expire.`;
+- Prefer false negatives over false positives — when in doubt, don't expire.${customSection}`;
 }
 
 /**
@@ -58,14 +52,6 @@ Classification guidelines:
  */
 export function buildClassificationPrompt(messageData) {
   const { sender, subject, sentDate, bodySnippet, category, customPrompt } = messageData;
-
-  if (customPrompt) {
-    return customPrompt
-      .replace("{sender}", sender || "unknown")
-      .replace("{subject}", subject || "")
-      .replace("{sentDate}", sentDate || "")
-      .replace("{bodySnippet}", bodySnippet || "(no body content provided)");
-  }
 
   const bodySection = bodySnippet
     ? `\nContent snippet:\n---\n${bodySnippet}\n---`
@@ -76,6 +62,10 @@ export function buildClassificationPrompt(messageData) {
   };
 
   const desc = categoryDescriptions[category] || category;
+
+  const customSection = customPrompt
+    ? `\n\nAdditional user-provided guidelines (these take priority):\n${customPrompt}`
+    : "";
 
   return `You are an email classifier. Determine if this email is ${desc}.
 
@@ -99,7 +89,7 @@ Guidelines:
 - Shipping/delivery notifications → does NOT match (these are tracked separately)
 - Marketing emails from stores → does NOT match
 - Account alerts, password resets → does NOT match
-- Prefer false negatives over false positives — when in doubt, say false.`;
+- Prefer false negatives over false positives — when in doubt, say false.${customSection}`;
 }
 
 /**
