@@ -303,6 +303,16 @@ document.getElementById("btnSaveLlm").addEventListener("click", async () => {
   showSaveStatus("llmSaveStatus");
 });
 
+document.getElementById("btnClearLlmCache").addEventListener("click", async () => {
+  if (confirm("Clear all cached LLM verdicts? Next scan will re-evaluate all messages.")) {
+    const { clearLlmCache } = await import("../rules/storage.js");
+    await clearLlmCache();
+    const btn = document.getElementById("btnClearLlmCache");
+    btn.textContent = "Cleared!";
+    setTimeout(() => { btn.textContent = "Clear LLM Cache"; }, 2000);
+  }
+});
+
 document.getElementById("btnTestLlm").addEventListener("click", async () => {
   const btn = document.getElementById("btnTestLlm");
   btn.disabled = true;
