@@ -9,7 +9,12 @@
  *   5. Run grace period cleanup
  */
 
-import { initializeStorage, getSettings, getRules, getActivityLog, logActivity, updateSettings } from "./rules/storage.js";
+import {
+  initializeStorage, getSettings, getRules, getActivityLog, logActivity, updateSettings,
+  getManualOverrides, setManualOverride, removeManualOverride,
+  addTrainingExample, getTrainingExamples, removeTrainingExampleBySubject, saveRule,
+  getCachedVerdict, removeCachedVerdict, STORAGE_KEYS,
+} from "./rules/storage.js";
 import { evaluateMessage } from "./rules/engine.js";
 import { executeAction, cleanupGracePeriod } from "./actions/executor.js";
 import { testLlmConnection, generateRuleFromExamples } from "./llm/adapter.js";
@@ -21,6 +26,24 @@ let scanInProgress = false;
 let lastScanTime = null;
 let lastScanResults = { processed: 0, expired: 0, errors: 0 };
 let lastScanError = null;
+
+// Persist scan state so it survives service worker suspension
+const SCAN_STATE_KEY = "mailreaper_scan_state";
+
+async function persistScanState() {
+  await messenger.storage.local.set({
+    [SCAN_STATE_KEY]: { lastScanTime, lastScanResults, lastScanError },
+  });
+}
+
+async function restoreScanState() {
+  const { [SCAN_STATE_KEY]: state } = await messenger.storage.local.get(SCAN_STATE_KEY);
+  if (state) {
+    lastScanTime = state.lastScanTime;
+    lastScanResults = state.lastScanResults || { processed: 0, expired: 0, errors: 0 };
+    lastScanError = state.lastScanError;
+  }
+}
 
 // Tracks messages already evaluated with no match.
 // Keyed by message ID, value is the rules fingerprint at evaluation time.
@@ -34,6 +57,7 @@ async function init() {
   console.log("[MailReaper] Initializing...");
 
   await initializeStorage();
+  await restoreScanState();
   const settings = await getSettings();
 
   // Set up scan alarm
@@ -46,6 +70,9 @@ async function init() {
     periodInMinutes: 360,
     delayInMinutes: 10, // First run 10 minutes after startup
   });
+
+  // Set up context menus for message actions
+  await setupContextMenus();
 
   console.log("[MailReaper] Initialized. Scan interval:", settings.scanIntervalMinutes, "minutes");
 }
@@ -67,6 +94,76 @@ messenger.alarms.onAlarm.addListener(async (alarm) => {
     await runScan();
   } else if (alarm.name === GRACE_ALARM_NAME) {
     await cleanupGracePeriod();
+  }
+});
+
+// ── Context Menus ────────────────────────────────────────────────────────────
+
+async function setupContextMenus() {
+  await messenger.menus.removeAll();
+
+  messenger.menus.create({
+    id: "mailreaper-mark-receipt",
+    title: "MailReaper: Mark as Receipt",
+    contexts: ["message_list"],
+  });
+
+  messenger.menus.create({
+    id: "mailreaper-mark-expired",
+    title: "MailReaper: Mark as Expired",
+    contexts: ["message_list"],
+  });
+
+  messenger.menus.create({
+    id: "mailreaper-separator",
+    type: "separator",
+    contexts: ["message_list"],
+  });
+
+  messenger.menus.create({
+    id: "mailreaper-expire-1h",
+    title: "MailReaper: Expire in 1 hour",
+    contexts: ["message_list"],
+  });
+
+  messenger.menus.create({
+    id: "mailreaper-expire-1d",
+    title: "MailReaper: Expire in 1 day",
+    contexts: ["message_list"],
+  });
+
+  messenger.menus.create({
+    id: "mailreaper-expire-7d",
+    title: "MailReaper: Expire in 7 days",
+    contexts: ["message_list"],
+  });
+}
+
+messenger.menus.onClicked.addListener(async (info) => {
+  // Get the message ID from the menu click
+  // info.selectedMessages contains the messages when context is message_list
+  const messages = info.selectedMessages?.messages;
+  if (!messages || messages.length === 0) return;
+
+  // Act on each selected message
+  for (const msg of messages) {
+    switch (info.menuItemId) {
+      case "mailreaper-mark-receipt":
+        await handleMarkAsReceipt(msg.id);
+        break;
+      case "mailreaper-mark-expired":
+        await handleMarkAsExpired(msg.id);
+        break;
+      case "mailreaper-expire-1h":
+        await handleSetManualExpiry(msg.id, 1);
+        break;
+      case "mailreaper-expire-1d":
+        await handleSetManualExpiry(msg.id, 24);
+        break;
+      case "mailreaper-expire-7d":
+        await handleSetManualExpiry(msg.id, 168);
+        break;
+    }
   }
 });
 
@@ -121,12 +218,16 @@ async function runScan() {
     }
     currentRulesFingerprint = fingerprint;
 
+    // Load manual overrides once for the entire scan
+    const overrides = await getManualOverrides();
+
     const cachedCount = evaluatedNoMatch.size;
     console.log(`[MailReaper] Starting scan of ${folders.length} folder(s):`, folders.map((f) => f.path || f.name));
     console.log(`[MailReaper] Skipping ${cachedCount} previously evaluated messages`);
 
     const minAgeMs = settings.minMessageAgeMinutes * 60 * 1000;
     const cutoffDate = new Date(Date.now() - minAgeMs);
+    const now = new Date();
 
     for (const folder of folders) {
       if (processed >= settings.maxMessagesPerScan) break;
@@ -142,9 +243,28 @@ async function runScan() {
           updateProgress();
 
           try {
+            // Check manual overrides (user-set expiry takes priority)
+            if (message.headerMessageId && overrides[message.headerMessageId]) {
+              const override = overrides[message.headerMessageId];
+              const expiresAt = new Date(override.expiresAt);
+              if (now > expiresAt) {
+                const verdict = {
+                  expired: true,
+                  rule: { name: "Manual expiry", action: "move", id: "manual-override" },
+                  expiresAt: override.expiresAt,
+                  reason: "Manually set expiry",
+                  confidence: 1.0,
+                };
+                await executeAction(message, verdict);
+                await removeManualOverride(message.headerMessageId);
+                expired++;
+              }
+              continue;
+            }
+
             // Skip messages we've already evaluated with no match
             // under the current rules fingerprint
-            if (evaluatedNoMatch.get(message.id) === fingerprint) {
+            if (evaluatedNoMatch.get(message.id)?.fingerprint === fingerprint) {
               skipped++;
               continue;
             }
@@ -167,8 +287,9 @@ async function runScan() {
             if (verdict && (verdict.expired || verdict.classified)) {
               await executeAction(message, verdict);
               expired++;
-            } else if (!verdict) {
-              evaluatedNoMatch.set(message.id, fingerprint);
+            } else {
+              const trace = verdict?.trace || [];
+              evaluatedNoMatch.set(message.id, { fingerprint, trace });
             }
           } catch (e) {
             errors++;
@@ -200,6 +321,7 @@ async function runScan() {
   } finally {
     scanInProgress = false;
     updateProgress();
+    await persistScanState();
   }
 }
 
@@ -319,11 +441,400 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
     case "runDiagnostic":
       return runDiagnostic();
 
+    case "markAsReceipt":
+      return handleMarkAsReceipt(message.messageId);
+
+    case "markAsExpired":
+      return handleMarkAsExpired(message.messageId);
+
+    case "setManualExpiry":
+      return handleSetManualExpiry(message.messageId, message.hours);
+
+    case "undoManualAction":
+      return handleUndoManualAction(message.logIndex);
+
+    case "getMessageInfo":
+      return getMessageInfo(message.messageId);
+
     default:
       console.warn("[MailReaper] Unknown message type:", message.type);
       return null;
   }
 });
+
+// ── Message Info ─────────────────────────────────────────────────────────────
+
+async function getMessageInfo(messageId) {
+  try {
+    const msg = await messenger.messages.get(messageId);
+    const headerMessageId = msg.headerMessageId;
+    const info = { status: [] };
+
+    if (!headerMessageId) {
+      return info;
+    }
+
+    // Check activity log for past actions on this message.
+    // Match by headerMessageId (reliable across moves) or subject+sender as fallback.
+    const activityLog = await getActivityLog(500);
+    const activityEntry = activityLog.find((e) => {
+      if (e.undone) return false;
+      if (e.headerMessageId && e.headerMessageId === headerMessageId) return true;
+      if (e.subject === msg.subject && e.sender === msg.author) return true;
+      return false;
+    });
+    if (activityEntry) {
+      const icons = {
+        moved: "📦", classified: "📂", deleted: "🗑️",
+        tagged: "🏷️", manual_expiry_set: "⏰",
+      };
+      const icon = icons[activityEntry.type] || "•";
+      const rule = activityEntry.rule || "";
+      const reason = activityEntry.reason || "";
+      const parts = [rule, reason].filter(Boolean);
+      info.status.push({ icon, text: parts.join(" — ") || activityEntry.type });
+      if (activityEntry.confidence && activityEntry.confidence < 1) {
+        info.status.push({ icon: "🎯", text: `Confidence: ${Math.round(activityEntry.confidence * 100)}%` });
+      }
+      info.hasActivity = true;
+    }
+
+    // Check manual overrides
+    const overrides = await getManualOverrides();
+    if (overrides[headerMessageId]) {
+      const override = overrides[headerMessageId];
+      const expiresAt = new Date(override.expiresAt);
+      const now = new Date();
+      if (now > expiresAt) {
+        info.status.push({ icon: "⏰", text: "Expiry elapsed — pending next scan" });
+      } else {
+        info.status.push({ icon: "⏰", text: `Expires ${formatRelativeTimeBackground(expiresAt)}` });
+      }
+      info.hasManualExpiry = true;
+    }
+
+    // Check LLM cache
+    const cached = await getCachedVerdict(headerMessageId);
+    if (cached) {
+      if (cached.error) {
+        info.status.push({ icon: "⚠️", text: `LLM error: ${cached.error}` });
+      } else if (cached.expired) {
+        info.status.push({ icon: "🔴", text: `LLM: expired — ${cached.reason}` });
+      } else if (cached.classified) {
+        info.status.push({ icon: "📂", text: `LLM: classified — ${cached.reason}` });
+      } else if (cached.expiresAt) {
+        const expiresAt = new Date(cached.expiresAt);
+        const now = new Date();
+        if (now > expiresAt) {
+          info.status.push({ icon: "🔴", text: `LLM: expired — ${cached.reason}` });
+        } else {
+          info.status.push({ icon: "🟡", text: `LLM: expires ${formatRelativeTimeBackground(expiresAt)} — ${cached.reason}` });
+        }
+      } else {
+        info.status.push({ icon: "🟢", text: `LLM: not time-sensitive — ${cached.reason}` });
+      }
+      info.hasCachedVerdict = true;
+    }
+
+    // Check evaluatedNoMatch
+    const noMatchEntry = evaluatedNoMatch.get(messageId);
+    if (noMatchEntry) {
+      const trace = noMatchEntry.trace || [];
+      if (trace.length > 0) {
+        info.status.push({ icon: "⚪", text: `Checked: ${trace.join(", ")}` });
+      } else {
+        info.status.push({ icon: "⚪", text: "Scanned — no rule criteria matched" });
+      }
+      info.scannedNoMatch = true;
+    }
+
+    // If we found nothing at all, say so
+    if (info.status.length === 0) {
+      if (!lastScanTime) {
+        info.status.push({ icon: "⚪", text: "Not scanned yet" });
+      } else {
+        // A scan has run but this message wasn't in it — likely not in a scanned folder,
+        // or too new, or beyond maxMessagesPerScan
+        const settings = await getSettings();
+        const msgDate = new Date(msg.date);
+        const minAgeMs = settings.minMessageAgeMinutes * 60 * 1000;
+        const tooNew = (Date.now() - msgDate.getTime()) < minAgeMs;
+
+        if (tooNew) {
+          info.status.push({ icon: "⚪", text: `Not scanned — less than ${settings.minMessageAgeMinutes}m old` });
+        } else {
+          info.status.push({ icon: "⚪", text: "Not scanned — not in a scanned folder?" });
+        }
+      }
+    }
+
+    return info;
+  } catch (e) {
+    console.error("[MailReaper] getMessageInfo failed:", e);
+    return { status: [] };
+  }
+}
+
+function formatRelativeTimeBackground(date) {
+  const now = Date.now();
+  const diffMs = date.getTime() - now;
+  const future = diffMs > 0;
+  const absDiffMin = Math.round(Math.abs(diffMs) / 60000);
+
+  if (absDiffMin < 1) return future ? "now" : "just now";
+  if (absDiffMin < 60) return `in ${absDiffMin}m`;
+  const diffHr = Math.round(absDiffMin / 60);
+  if (diffHr < 24) return `in ${diffHr}h`;
+  const diffDays = Math.round(diffHr / 24);
+  return `in ${diffDays}d`;
+}
+
+// ── Manual Action Handlers ───────────────────────────────────────────────────
+
+async function handleMarkAsReceipt(messageId) {
+  try {
+    const msg = await messenger.messages.get(messageId);
+    const originalFolderId = msg.folder?.id || null;
+
+    // Get body snippet
+    let bodySnippet = "";
+    try {
+      const parts = await messenger.messages.listInlineTextParts(messageId);
+      bodySnippet = parts.map((p) => p.content).join("\n").substring(0, 500);
+    } catch {
+      // Body not available — proceed without it
+    }
+
+    // Store training example
+    await addTrainingExample({
+      sender: msg.author,
+      subject: msg.subject,
+      sentDate: new Date(msg.date).toISOString(),
+      bodySnippet,
+      category: "receipt",
+    });
+
+    // Move to Paper-Trail via executeAction with a synthetic verdict
+    const syntheticVerdict = {
+      classified: true,
+      rule: { name: "Manual: receipt", action: "move", classifyFolder: "Paper-Trail" },
+      reason: "Manually marked as receipt",
+      confidence: 1.0,
+    };
+    await executeAction(msg, syntheticVerdict);
+
+    // Patch the activity log entry with undo info
+    await patchLastActivity(messageId, {
+      undoable: true,
+      undoType: "classified",
+      originalFolderId,
+    });
+
+    // Check if we should auto-suggest a rule (non-blocking)
+    suggestRuleIfReady().catch((e) =>
+      console.error("[MailReaper] Rule suggestion failed:", e)
+    );
+
+    return { success: true };
+  } catch (e) {
+    console.error("[MailReaper] markAsReceipt failed:", e);
+    return { success: false, error: e.message };
+  }
+}
+
+async function handleMarkAsExpired(messageId) {
+  try {
+    const msg = await messenger.messages.get(messageId);
+    const originalFolderId = msg.folder?.id || null;
+
+    // Get body snippet for the training example
+    let bodySnippet = "";
+    try {
+      const parts = await messenger.messages.listInlineTextParts(messageId);
+      bodySnippet = parts.map((p) => p.content).join("\n").substring(0, 500);
+    } catch {
+      // Body not available — proceed without it
+    }
+
+    // Store as an expiry training example so the LLM learns from it
+    await addTrainingExample({
+      sender: msg.author,
+      subject: msg.subject,
+      sentDate: new Date(msg.date).toISOString(),
+      bodySnippet,
+      category: "expiry",
+      // The user is saying "this is expired right now" — record that
+      expiresAt: new Date().toISOString(),
+    });
+
+    // Invalidate any cached LLM verdict for this message
+    if (msg.headerMessageId) {
+      await removeCachedVerdict(msg.headerMessageId);
+    }
+
+    // Move to Expired folder
+    const verdict = {
+      expired: true,
+      rule: { name: "Manual: expired", action: "move", id: "manual-expired" },
+      expiresAt: new Date().toISOString(),
+      reason: "Manually marked as expired",
+      confidence: 1.0,
+    };
+    await executeAction(msg, verdict);
+
+    // Patch the activity log entry with undo info
+    await patchLastActivity(messageId, {
+      undoable: true,
+      undoType: "expired",
+      originalFolderId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    console.error("[MailReaper] markAsExpired failed:", e);
+    return { success: false, error: e.message };
+  }
+}
+
+async function handleSetManualExpiry(messageId, hours) {
+  try {
+    const msg = await messenger.messages.get(messageId);
+    const headerMessageId = msg.headerMessageId;
+
+    if (!headerMessageId) {
+      return { success: false, error: "Message has no header Message-ID" };
+    }
+
+    const expiresAt = new Date(Date.now() + hours * 3600000).toISOString();
+    await setManualOverride(headerMessageId, {
+      expiresAt,
+      setAt: new Date().toISOString(),
+      subject: msg.subject,
+    });
+
+    await logActivity({
+      type: "manual_expiry_set",
+      messageId: msg.id,
+      subject: msg.subject,
+      sender: msg.author,
+      rule: "Manual expiry",
+      expiresAt,
+      reason: `User set ${hours}h expiry`,
+      undoable: true,
+      undoType: "manual_expiry",
+      headerMessageId,
+    });
+
+    // Clear evaluatedNoMatch so next scan re-evaluates this message
+    evaluatedNoMatch.delete(msg.id);
+
+    return { success: true, expiresAt };
+  } catch (e) {
+    console.error("[MailReaper] setManualExpiry failed:", e);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Patch the most recent activity log entry for a given messageId with extra fields.
+ * Used to attach undo metadata after executeAction logs the entry.
+ */
+async function patchLastActivity(messageId, patch) {
+  const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+    await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+  if (!log) return;
+
+  const entry = log.find((e) => e.messageId === messageId);
+  if (entry) {
+    Object.assign(entry, patch);
+    await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+  }
+}
+
+async function handleUndoManualAction(logIndex) {
+  const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+    await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+  if (!log || !log[logIndex]) {
+    return { success: false, error: "Activity entry not found" };
+  }
+
+  const entry = log[logIndex];
+  if (!entry.undoable) {
+    return { success: false, error: "This action cannot be undone" };
+  }
+
+  try {
+    if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
+      // Move message back to original folder
+      await messenger.messages.move([entry.messageId], entry.originalFolderId);
+
+      // Remove the most recent training example matching this message
+      await removeTrainingExampleBySubject(entry.subject);
+
+      console.log(`[MailReaper] Undid ${entry.undoType} action for "${entry.subject}"`);
+    } else if (entry.undoType === "manual_expiry" && entry.headerMessageId) {
+      // Remove the manual override
+      await removeManualOverride(entry.headerMessageId);
+
+      console.log(`[MailReaper] Undid manual expiry for "${entry.subject}"`);
+    } else {
+      return { success: false, error: "Unknown undo type" };
+    }
+
+    // Mark entry as undone (not undoable anymore)
+    entry.undoable = false;
+    entry.undone = true;
+    await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+
+    return { success: true };
+  } catch (e) {
+    console.error("[MailReaper] Undo failed:", e);
+    return { success: false, error: e.message };
+  }
+}
+
+async function suggestRuleIfReady() {
+  const settings = await getSettings();
+  if (settings.llmProvider === "none") return;
+
+  const examples = await getTrainingExamples("receipt");
+  if (examples.length < 5) return;
+
+  try {
+    const result = await generateRuleFromExamples(examples, settings);
+    if (!result || !result.name) return;
+
+    const rule = {
+      name: result.name,
+      enabled: false,
+      priority: 50,
+      match: {
+        senderPatterns: result.senderPatterns || [],
+        subjectPatterns: result.subjectPatterns || [],
+      },
+      expiration: {
+        type: result.expirationType === "ttl" ? "ttl" : "classify",
+        ...(result.ttlHours && { hours: result.ttlHours }),
+        ...(result.expirationType !== "ttl" && { category: "receipt" }),
+      },
+      action: result.expirationType === "ttl" ? "move" : "move",
+      classifyFolder: "Paper-Trail",
+      suggested: true,
+    };
+
+    await saveRule(rule);
+
+    await messenger.notifications.create(`mailreaper-rule-${Date.now()}`, {
+      type: "basic",
+      title: "MailReaper",
+      message: `Suggested a new receipt rule: "${result.name}". Review it in Settings.`,
+    });
+
+    console.log(`[MailReaper] Auto-suggested rule: ${result.name}`);
+  } catch (e) {
+    console.error("[MailReaper] Rule suggestion failed:", e);
+  }
+}
 
 /**
  * Get all accounts and their folder trees for the settings UI.
@@ -494,14 +1005,26 @@ function computeRulesFingerprint(rules) {
 }
 
 messenger.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.mailreaper_rules) {
+  if (area !== "local") return;
+
+  if (changes.mailreaper_rules) {
     const oldFingerprint = currentRulesFingerprint;
-    // Fingerprint will be recomputed on next scan; clear it to force recompute
     currentRulesFingerprint = null;
 
     if (oldFingerprint !== null) {
       evaluatedNoMatch.clear();
       console.log("[MailReaper] Rules changed, cleared evaluation cache");
+    }
+  }
+
+  // Clear evaluation cache when LLM provider changes — messages that were
+  // skipped because LLM was "none" need to be re-evaluated
+  if (changes.mailreaper_settings) {
+    const oldSettings = changes.mailreaper_settings.oldValue || {};
+    const newSettings = changes.mailreaper_settings.newValue || {};
+    if (oldSettings.llmProvider !== newSettings.llmProvider) {
+      evaluatedNoMatch.clear();
+      console.log(`[MailReaper] LLM provider changed (${oldSettings.llmProvider} → ${newSettings.llmProvider}), cleared evaluation cache`);
     }
   }
 });
