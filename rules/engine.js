@@ -197,7 +197,11 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           if (cached.expired) {
             return { ...cached, rule };
           }
-          return null; // Cached as "not expired"
+          // Re-evaluate cached future expiration against current time
+          if (cached.expiresAt && now > new Date(cached.expiresAt)) {
+            return { ...cached, expired: true, rule };
+          }
+          return null; // Cached as "not expired" (and still not expired)
         }
       }
 
