@@ -15,7 +15,8 @@
     "messagesTags",
     "storage",
     "alarms",
-    "notifications"
+    "notifications",
+    "menus"
   ],
   "host_permissions": [
     "<all_urls>"
