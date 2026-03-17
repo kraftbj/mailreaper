@@ -76,6 +76,7 @@ async function moveToFolder(message, verdict, settings) {
   await logActivity({
     type: activityType,
     messageId: message.id,
+    headerMessageId: message.headerMessageId,
     subject: message.subject,
     sender: message.author,
     rule: rule.name,
@@ -100,6 +101,7 @@ async function deleteMessage(message, verdict) {
   await logActivity({
     type: "deleted",
     messageId: message.id,
+    headerMessageId: message.headerMessageId,
     subject: message.subject,
     sender: message.author,
     rule: verdict.rule.name,
@@ -132,6 +134,7 @@ async function tagAsExpired(message, verdict) {
   await logActivity({
     type: "tagged",
     messageId: message.id,
+    headerMessageId: message.headerMessageId,
     subject: message.subject,
     sender: message.author,
     rule: verdict.rule.name,
@@ -324,4 +327,4 @@ async function ensureExpiredTag() {
   }
 }
 
-export { EXPIRED_FOLDER_NAME };
+export { EXPIRED_FOLDER_NAME, getOrCreateNamedFolder };
