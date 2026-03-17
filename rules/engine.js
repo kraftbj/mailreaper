@@ -4,7 +4,7 @@
  * Returns a verdict for each message: { expired: bool, rule, expiresAt, reason }
  */
 
-import { getRules, getSettings, getCachedVerdict, setCachedVerdict } from "./storage.js";
+import { getRules, getSettings, getCachedVerdict, setCachedVerdict, getTrainingExamples } from "./storage.js";
 import { analyzeMesageWithLlm, classifyMessageWithLlm } from "../llm/adapter.js";
 
 /**
@@ -43,11 +43,16 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
     return bodyText;
   }
 
+  // Track which rules were evaluated for debugging
+  const trace = [];
+
   for (const rule of enabledRules) {
     // Check if message matches this rule's criteria (uses only MessageHeader data)
     if (!matchesRule(message, rule)) {
       continue;
     }
+
+    trace.push(rule.name);
 
     // Evaluate expiration based on rule type
     const verdict = await evaluateExpiration(
@@ -59,11 +64,12 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
     );
 
     if (verdict) {
+      verdict.trace = trace;
       return verdict;
     }
   }
 
-  return null;
+  return { noMatch: true, trace };
 }
 
 /**
@@ -212,13 +218,15 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           ? null
           : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
 
+        const expiryExamples = await getTrainingExamples("expiry");
+
         const llmResult = await analyzeMesageWithLlm({
           sender: message.author,
           subject: message.subject,
           sentDate: sentDate.toISOString(),
           bodySnippet: snippet,
           customPrompt: rule.expiration.prompt || null,
-        }, settings);
+        }, settings, expiryExamples);
 
         // Cache the result
         if (messageIdHeader) {
@@ -248,6 +256,13 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         }
       } catch (e) {
         console.error(`[MailReaper] LLM analysis failed for message ${message.id}:`, e);
+        // Cache the error so getMessageInfo can report it
+        if (messageIdHeader) {
+          await setCachedVerdict(messageIdHeader, {
+            error: e.message || "LLM call failed",
+            reason: `Error: ${e.message || "LLM call failed"}`,
+          });
+        }
       }
       return null;
     }
@@ -280,14 +295,17 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           ? null
           : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
 
+        const category = rule.expiration.category || "receipt";
+        const trainingExamples = await getTrainingExamples(category);
+
         const llmResult = await classifyMessageWithLlm({
           sender: message.author,
           subject: message.subject,
           sentDate: sentDate.toISOString(),
           bodySnippet: snippet,
-          category: rule.expiration.category || "receipt",
+          category,
           customPrompt: rule.expiration.prompt || null,
-        }, settings);
+        }, settings, trainingExamples);
 
         if (messageIdHeader) {
           await setCachedVerdict(messageIdHeader, {
@@ -307,6 +325,12 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         }
       } catch (e) {
         console.error(`[MailReaper] LLM classify failed for message ${message.id}:`, e);
+        if (messageIdHeader) {
+          await setCachedVerdict(messageIdHeader, {
+            error: e.message || "LLM classify failed",
+            reason: `Error: ${e.message || "LLM classify failed"}`,
+          });
+        }
       }
       return null;
     }
