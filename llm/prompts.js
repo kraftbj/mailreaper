@@ -77,7 +77,7 @@ export function buildClassificationPrompt(messageData, examples) {
     : "\n(Body content not provided — analyze based on metadata only)";
 
   const categoryDescriptions = {
-    receipt: "a purchase receipt, payment confirmation, order confirmation, invoice, billing statement, or financial transaction record",
+    receipt: "a purchase receipt, payment confirmation, order confirmation, paid invoice, billing statement, or financial transaction record",
   };
 
   const desc = categoryDescriptions[category] || category;
@@ -114,8 +114,10 @@ Respond ONLY with a JSON object:
 Guidelines:
 - Purchase receipts, order confirmations, payment confirmations → matches
 - Monthly/annual billing statements, subscription renewals → matches
-- Invoices, donation receipts, tax documents → matches
-- Shipping/delivery notifications → does NOT match (these are tracked separately)
+- Paid invoices, donation receipts, tax documents → matches
+- Invoices requesting payment (unpaid, due, amount owed) → does NOT match (user needs to act on these)
+- Invoices where payment status is unclear → does NOT match (assume unpaid)
+- Shipping/delivery notifications → does NOT match (tracked separately)
 - Marketing emails from stores → does NOT match
 - Account alerts, password resets → does NOT match
 - Prefer false negatives over false positives — when in doubt, say false.${customSection}`;
