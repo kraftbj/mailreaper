@@ -228,9 +228,9 @@ export async function clearActivityLog() {
 // ── LLM Cache ───────────────────────────────────────────────────────────────
 
 // Expired verdicts are re-checked after 24h (in case something changed).
-// "Not time-sensitive" verdicts are cached for 30 days (they won't change).
+// "Not time-sensitive" verdicts are cached for 7 days.
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
-const CACHE_TTL_NOT_SENSITIVE_MS = 30 * 24 * 60 * 60 * 1000;
+const CACHE_TTL_NOT_SENSITIVE_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_TTL_ERROR_MS = 10 * 60 * 1000; // Retry errors after 10 minutes
 
 export async function getCachedVerdict(messageIdHeader) {

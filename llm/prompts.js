@@ -28,17 +28,40 @@ export function buildAnalysisPrompt(messageData, examples) {
     examplesSection = `\n\nThe user has confirmed these emails were time-sensitive and expired:\n${lines.join("\n")}\n\nUse these as reference — similar emails should be treated as time-sensitive.`;
   }
 
-  const currentTime = new Date().toISOString();
+  const now = new Date();
+  const currentTime = now.toISOString();
+  const currentDateReadable = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const sentDateObj = new Date(sentDate);
+  const sentDateReadable = sentDateObj.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-  return `You are an email expiration classifier. Determine if this email is time-sensitive and whether it has expired.
+  return `Decide if this email has expired. Follow the steps below.
 
-IMPORTANT: The current date/time is ${currentTime}. Compare any dates in the email against this.${examplesSection}
+TODAY is ${currentDateReadable} (${currentTime}).
 
 Email:
 - From: ${sender || "unknown"}
 - Subject: ${subject || "(no subject)"}
-- Sent: ${sentDate}
+- Sent: ${sentDateReadable} (${sentDate})
 ${bodySection}
+${examplesSection}
+STEP 1: Does the email contain a deadline, event date, or expiration?
+Look for: dates, times, "ends tonight", "ends at midnight", "today only", "last chance", "expires", "final hours", appointment times, event times, check-in times, verification codes.
+
+STEP 2: What is the expiration date/time?
+- If "ends tonight", "ends at midnight", "today only", "last chance", "final hours" → midnight on the SEND DATE (${sentDateReadable}).
+- If a specific date/time is mentioned → use that date/time.
+- If "appointment" or "event" with a date → the event date/time.
+- If verification code, OTP, magic link → 1 hour after send date.
+- If shipping "out for delivery", "arriving today" → 24 hours after send date.
+- If transit alert, delay, disruption → 3 hours after send date.
+
+STEP 3: Is the expiration date BEFORE today (${currentDateReadable})?
+If yes → isTimeSensitive: true, and set expiresAt.
+
+NOT time-sensitive (always set isTimeSensitive: false):
+- Newsletters, digests, informational content.
+- Personal correspondence.
+- Receipts, order confirmations, billing statements.
 
 Respond ONLY with JSON:
 {
@@ -48,22 +71,7 @@ Respond ONLY with JSON:
   "confidence": 0.0 to 1.0
 }
 
-Rules for what is time-sensitive (set isTimeSensitive to true and extract expiresAt):
-- Appointment reminders, event reminders, calendar notifications → expire at the event time. "Reminder: Upcoming appointment" for March 12 is expired if current date is after March 12.
-- Flash sales, coupons, limited-time offers → expire at the deadline. "Today only" or "ends tonight" = midnight of send date (assume US Eastern).
-- One-time passwords, verification codes, magic links → expire 1 hour after send.
-- Transit/service alerts, delays, disruptions → expire 3 hours after send.
-- Shipping "out for delivery" or "arriving today" notices → expire 24 hours after send.
-- Event invitations for past dates → expire at event time.
-- Job application deadlines → expire at the deadline.
-- Check-in reminders (flights, hotels, medical) → expire 24 hours after the check-in time.
-
-NOT time-sensitive (set isTimeSensitive to false):
-- Newsletters, digests, informational content.
-- Personal correspondence.
-- Receipts, order confirmations, billing statements.
-
-If the email references a specific date/time that is before ${currentTime}, it is expired. When in doubt, prefer false negatives.${customSection}`;
+When in doubt, prefer false negatives.${customSection}`;
 }
 
 /**

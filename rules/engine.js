@@ -228,23 +228,27 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           customPrompt: rule.expiration.prompt || null,
         }, settings, expiryExamples);
 
+        console.log(`[MailReaper] LLM result for "${message.subject}":`, JSON.stringify(llmResult));
+
+        const isExpired = llmResult.isTimeSensitive && llmResult.expiresAt && now > new Date(llmResult.expiresAt);
+
         // Cache the result
         if (messageIdHeader) {
           await setCachedVerdict(messageIdHeader, {
-            expired: llmResult.isTimeSensitive && llmResult.expiresAt && now > new Date(llmResult.expiresAt),
+            expired: isExpired,
             expiresAt: llmResult.expiresAt,
             reason: llmResult.reason,
             confidence: llmResult.confidence,
           });
         }
 
-        if (
-          llmResult.isTimeSensitive &&
-          llmResult.expiresAt &&
-          llmResult.confidence >= settings.llmConfidenceThreshold
-        ) {
+        if (llmResult.isTimeSensitive && llmResult.expiresAt) {
           const expiresAt = new Date(llmResult.expiresAt);
-          if (now > expiresAt) {
+          if (isNaN(expiresAt.getTime())) {
+            console.warn(`[MailReaper] LLM returned unparseable expiresAt: "${llmResult.expiresAt}" for "${message.subject}"`);
+          } else if (llmResult.confidence < settings.llmConfidenceThreshold) {
+            console.log(`[MailReaper] LLM confidence ${llmResult.confidence} below threshold ${settings.llmConfidenceThreshold} for "${message.subject}"`);
+          } else if (now > expiresAt) {
             return {
               expired: true,
               rule,
