@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS = {
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
   ollamaEndpoint: "http://localhost:11434",
-  ollamaModel: "llama3.2:3b",
+  ollamaModel: "qwen2.5:7b",
   llmMaxSnippetLength: 2000,
   llmConfidenceThreshold: 0.7, // Minimum confidence to act on LLM verdict
   llmMetadataOnly: false, // If true, don't send body content to LLM
