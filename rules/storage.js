@@ -11,6 +11,8 @@ const STORAGE_KEYS = {
   ACTIVITY_LOG: "mailreaper_activity",
   LLM_CACHE: "mailreaper_llm_cache",
   INITIALIZED: "mailreaper_initialized",
+  MANUAL_OVERRIDES: "mailreaper_manual_overrides",
+  TRAINING_EXAMPLES: "mailreaper_training_examples",
 };
 
 const DEFAULT_SETTINGS = {
@@ -229,6 +231,7 @@ export async function clearActivityLog() {
 // "Not time-sensitive" verdicts are cached for 30 days (they won't change).
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
 const CACHE_TTL_NOT_SENSITIVE_MS = 30 * 24 * 60 * 60 * 1000;
+const CACHE_TTL_ERROR_MS = 10 * 60 * 1000; // Retry errors after 10 minutes
 
 export async function getCachedVerdict(messageIdHeader) {
   const { [STORAGE_KEYS.LLM_CACHE]: cache } =
@@ -239,7 +242,14 @@ export async function getCachedVerdict(messageIdHeader) {
   if (!entry) return null;
 
   const age = Date.now() - entry.cachedAt;
-  const ttl = (entry.verdict?.expired || entry.verdict?.classified) ? CACHE_TTL_EXPIRED_MS : CACHE_TTL_NOT_SENSITIVE_MS;
+  let ttl;
+  if (entry.verdict?.error) {
+    ttl = CACHE_TTL_ERROR_MS;
+  } else if (entry.verdict?.expired || entry.verdict?.classified) {
+    ttl = CACHE_TTL_EXPIRED_MS;
+  } else {
+    ttl = CACHE_TTL_NOT_SENSITIVE_MS;
+  }
 
   if (age > ttl) {
     return null;
@@ -269,8 +279,88 @@ export async function setCachedVerdict(messageIdHeader, verdict) {
   }
 }
 
+export async function removeCachedVerdict(messageIdHeader) {
+  const { [STORAGE_KEYS.LLM_CACHE]: cache } =
+    await messenger.storage.local.get(STORAGE_KEYS.LLM_CACHE);
+  if (!cache || !cache[messageIdHeader]) return;
+  delete cache[messageIdHeader];
+  await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: cache });
+}
+
 export async function clearLlmCache() {
   await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: {} });
+}
+
+// ── Manual Overrides ─────────────────────────────────────────────────────────
+
+export async function getManualOverrides() {
+  const { [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides } =
+    await messenger.storage.local.get(STORAGE_KEYS.MANUAL_OVERRIDES);
+  return overrides || {};
+}
+
+export async function setManualOverride(messageIdHeader, override) {
+  const overrides = await getManualOverrides();
+  overrides[messageIdHeader] = override;
+  await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+}
+
+export async function removeManualOverride(messageIdHeader) {
+  const overrides = await getManualOverrides();
+  delete overrides[messageIdHeader];
+  await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+}
+
+// ── Training Examples ────────────────────────────────────────────────────────
+
+const MAX_TRAINING_EXAMPLES = 100;
+
+export async function addTrainingExample(example) {
+  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+  const examples = all || [];
+
+  examples.push({ ...example, addedAt: new Date().toISOString() });
+
+  // Cap at MAX_TRAINING_EXAMPLES (keep most recent)
+  while (examples.length > MAX_TRAINING_EXAMPLES) {
+    examples.shift();
+  }
+
+  await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: examples });
+}
+
+export async function getTrainingExamples(category) {
+  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+  if (!all) return [];
+  return category ? all.filter((ex) => ex.category === category) : all;
+}
+
+export async function removeTrainingExampleBySubject(subject) {
+  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+  if (!all || all.length === 0) return;
+
+  // Remove the most recent example matching this subject
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i].subject === subject) {
+      all.splice(i, 1);
+      await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: all });
+      return;
+    }
+  }
+}
+
+export async function clearTrainingExamples(category) {
+  if (!category) {
+    await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: [] });
+    return;
+  }
+  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+  const filtered = (all || []).filter((ex) => ex.category !== category);
+  await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: filtered });
 }
 
 // ── Export all storage keys for debugging ────────────────────────────────────
