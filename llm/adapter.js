@@ -12,8 +12,8 @@ import { buildAnalysisPrompt, buildRuleGenerationPrompt, buildClassificationProm
  * @param {object} settings - Extension settings (provider, keys, endpoints)
  * @returns {Promise<object>} { isTimeSensitive, expiresAt, reason, confidence }
  */
-export async function analyzeMesageWithLlm(messageData, settings) {
-  const prompt = buildAnalysisPrompt(messageData);
+export async function analyzeMesageWithLlm(messageData, settings, examples) {
+  const prompt = buildAnalysisPrompt(messageData, examples);
 
   switch (settings.llmProvider) {
     case "gemini":
@@ -32,8 +32,8 @@ export async function analyzeMesageWithLlm(messageData, settings) {
  * @param {object} settings - Extension settings
  * @returns {Promise<object>} { matches, reason, confidence }
  */
-export async function classifyMessageWithLlm(messageData, settings) {
-  const prompt = buildClassificationPrompt(messageData);
+export async function classifyMessageWithLlm(messageData, settings, examples) {
+  const prompt = buildClassificationPrompt(messageData, examples);
 
   switch (settings.llmProvider) {
     case "gemini":
