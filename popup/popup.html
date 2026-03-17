@@ -15,8 +15,12 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html {
+      min-width: 420px;
+    }
+
     body {
-      width: 340px;
+      width: 420px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       color: var(--text);
@@ -147,6 +151,33 @@
       font-size: 12px;
     }
 
+    .undo-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      padding: 0 4px;
+      flex: none;
+      text-decoration: underline;
+    }
+
+    .undo-btn:hover { color: var(--text); }
+
+    .activity-undone { opacity: 0.4; text-decoration: line-through; }
+
+    .msg-info-item {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 2px 0;
+    }
+
+    .msg-info-item .info-icon { flex-shrink: 0; width: 14px; text-align: center; }
+    .msg-info-item .info-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     .actions {
       display: flex;
       gap: 8px;
@@ -237,6 +268,28 @@
     <div id="activityList">
       <div class="empty-state">No activity yet</div>
     </div>
+  </div>
+
+  <div id="selectedMessage" style="display:none; padding: 10px 16px; border-bottom: 1px solid var(--border);">
+    <h3 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px;">Selected Message</h3>
+    <div id="selectedSubject" style="font-size: 12px; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title=""></div>
+    <div id="messageInfo" style="display: none; margin-bottom: 6px;"></div>
+    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+      <button id="btnMarkReceipt" style="flex: none; padding: 6px 10px; font-size: 11px;">Mark as Receipt</button>
+      <button id="btnMarkExpired" style="flex: none; padding: 6px 10px; font-size: 11px;">Mark as Expired</button>
+    </div>
+    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+      <select id="expiryPreset" style="flex: 1; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text); font-size: 11px;">
+        <option value="1">1 hour</option>
+        <option value="3">3 hours</option>
+        <option value="24" selected>1 day</option>
+        <option value="72">3 days</option>
+        <option value="168">7 days</option>
+        <option value="720">30 days</option>
+      </select>
+      <button id="btnSetExpiry" style="flex: none; padding: 6px 10px; font-size: 11px;">Set Expiry</button>
+    </div>
+    <div id="selectedStatus" style="font-size: 11px; color: var(--accent-green); display: none;"></div>
   </div>
 
   <div class="actions">

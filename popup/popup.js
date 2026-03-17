@@ -8,6 +8,7 @@ const ACTION_ICONS = {
   deleted: "🗑️",
   tagged: "🏷️",
   grace_deleted: "💀",
+  manual_expiry_set: "⏰",
   error: "⚠️",
 };
 
@@ -106,15 +107,39 @@ function renderActivity(entries) {
 
   container.innerHTML = entries
     .map(
-      (entry) => `
-    <div class="activity-item">
+      (entry, i) => `
+    <div class="activity-item${entry.undone ? " activity-undone" : ""}">
       <span class="activity-icon">${ACTION_ICONS[entry.type] || "•"}</span>
       <span class="activity-text" title="${escapeHtml(entry.subject || "")}">${escapeHtml(truncate(entry.subject || "Unknown", 30))}</span>
-      <span class="activity-time">${formatRelativeTime(new Date(entry.timestamp))}</span>
+      ${entry.undoable ? `<button class="undo-btn" data-undo-index="${i}">undo</button>` : ""}
+      ${entry.undone ? `<span class="activity-time">undone</span>` : `<span class="activity-time">${formatRelativeTime(new Date(entry.timestamp))}</span>`}
     </div>
   `
     )
     .join("");
+
+  // Attach undo click handlers
+  container.querySelectorAll(".undo-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const index = parseInt(btn.dataset.undoIndex, 10);
+      btn.disabled = true;
+      btn.textContent = "...";
+      try {
+        const result = await messenger.runtime.sendMessage({
+          type: "undoManualAction",
+          logIndex: index,
+        });
+        if (result?.success) {
+          await loadStatus();
+        } else {
+          btn.textContent = "failed";
+        }
+      } catch {
+        btn.textContent = "failed";
+      }
+    });
+  });
 }
 
 function formatRelativeTime(date, future = false) {
@@ -186,10 +211,148 @@ document.getElementById("btnSettings").addEventListener("click", () => {
 });
 
 let fastPolling = null;
+let selectedMessageId = null;
+
+// ── Selected Message ─────────────────────────────────────────────────────────
+
+async function loadSelectedMessage() {
+  const section = document.getElementById("selectedMessage");
+  const statusEl = document.getElementById("selectedStatus");
+  const infoEl = document.getElementById("messageInfo");
+  statusEl.style.display = "none";
+  infoEl.style.display = "none";
+
+  try {
+    // Try message display first (works when viewing a message in its own tab)
+    // then fall back to mailTabs selection (message list)
+    let msg = null;
+    try {
+      const tabs = await messenger.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        const displayed = await messenger.messageDisplay.getDisplayedMessage(tabs[0].id);
+        if (displayed) msg = displayed;
+      }
+    } catch {
+      // Not a message display tab — fall through
+    }
+
+    if (!msg) {
+      const result = await messenger.mailTabs.getSelectedMessages();
+      if (result && result.messages && result.messages.length === 1) {
+        msg = result.messages[0];
+      }
+    }
+
+    if (msg) {
+      selectedMessageId = msg.id;
+      const subjectEl = document.getElementById("selectedSubject");
+      const display = truncate(msg.subject || "(no subject)", 45);
+      subjectEl.textContent = display;
+      subjectEl.title = msg.subject || "";
+      section.style.display = "block";
+
+      // Fetch what MailReaper knows about this message
+      try {
+        const info = await messenger.runtime.sendMessage({
+          type: "getMessageInfo",
+          messageId: msg.id,
+        });
+        if (info && info.status && info.status.length > 0) {
+          infoEl.innerHTML = info.status.map((s) =>
+            `<div class="msg-info-item"><span class="info-icon">${s.icon}</span><span class="info-text" title="${escapeHtml(s.text)}">${escapeHtml(s.text)}</span></div>`
+          ).join("");
+          infoEl.style.display = "block";
+        }
+      } catch {
+        // Info lookup failed — not critical, just skip
+      }
+    } else {
+      selectedMessageId = null;
+      section.style.display = "none";
+    }
+  } catch {
+    selectedMessageId = null;
+    section.style.display = "none";
+  }
+}
+
+function showSelectedStatus(text) {
+  const el = document.getElementById("selectedStatus");
+  el.textContent = text;
+  el.style.display = "block";
+  setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+
+document.getElementById("btnMarkReceipt").addEventListener("click", async () => {
+  if (!selectedMessageId) return;
+  const btn = document.getElementById("btnMarkReceipt");
+  btn.disabled = true;
+  try {
+    const result = await messenger.runtime.sendMessage({
+      type: "markAsReceipt",
+      messageId: selectedMessageId,
+    });
+    if (result?.success) {
+      showSelectedStatus("Marked as receipt and moved to Paper-Trail");
+      await loadStatus();
+    } else {
+      showSelectedStatus("Failed: " + (result?.error || "unknown error"));
+    }
+  } catch (e) {
+    showSelectedStatus("Error: " + e.message);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById("btnMarkExpired").addEventListener("click", async () => {
+  if (!selectedMessageId) return;
+  const btn = document.getElementById("btnMarkExpired");
+  btn.disabled = true;
+  try {
+    const result = await messenger.runtime.sendMessage({
+      type: "markAsExpired",
+      messageId: selectedMessageId,
+    });
+    if (result?.success) {
+      showSelectedStatus("Marked as expired and moved to Expired folder");
+      await loadStatus();
+    } else {
+      showSelectedStatus("Failed: " + (result?.error || "unknown error"));
+    }
+  } catch (e) {
+    showSelectedStatus("Error: " + e.message);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById("btnSetExpiry").addEventListener("click", async () => {
+  if (!selectedMessageId) return;
+  const btn = document.getElementById("btnSetExpiry");
+  const hours = parseInt(document.getElementById("expiryPreset").value, 10);
+  btn.disabled = true;
+  try {
+    const result = await messenger.runtime.sendMessage({
+      type: "setManualExpiry",
+      messageId: selectedMessageId,
+      hours,
+    });
+    if (result?.success) {
+      const label = hours >= 24 ? `${hours / 24} day(s)` : `${hours} hour(s)`;
+      showSelectedStatus(`Expires in ${label}`);
+      await loadStatus();
+    } else {
+      showSelectedStatus("Failed: " + (result?.error || "unknown error"));
+    }
+  } catch (e) {
+    showSelectedStatus("Error: " + e.message);
+  }
+  btn.disabled = false;
+});
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
 loadStatus();
+loadSelectedMessage();
 
 // Refresh every 10 seconds while popup is open
 setInterval(loadStatus, 10000);
