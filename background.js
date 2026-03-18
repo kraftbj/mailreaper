@@ -57,6 +57,8 @@ async function restoreScanState() {
 // Keyed by message ID, value is { fingerprint, trace } where fingerprint is
 // the rules fingerprint at evaluation time and trace lists rules checked.
 // When rules change, the cache is cleared so messages are re-evaluated.
+// In-memory only — resets on service worker restart, which is acceptable
+// since re-evaluation is cheap compared to LLM calls.
 let evaluatedNoMatch = new Map();
 let currentRulesFingerprint = null;
 
@@ -302,7 +304,7 @@ async function runScan() {
                   return parts.map((p) => p.content).join("\n");
                 } catch (e) {
                   console.warn(`[MailReaper] Failed to get body text for message ${message.id}:`, e);
-                  return "";
+                  return null;
                 }
               }
             );
@@ -673,7 +675,7 @@ async function handleMarkAsReceipt(messageId) {
     await executeAction(msg, syntheticVerdict);
 
     // Patch the activity log entry with undo info
-    await patchLastActivity(messageId, {
+    const patched = await patchLastActivity(messageId, {
       undoable: true,
       undoType: "classified",
       originalFolderId,
@@ -684,7 +686,7 @@ async function handleMarkAsReceipt(messageId) {
       console.error("[MailReaper] Rule suggestion failed:", e)
     );
 
-    return { success: true };
+    return { success: true, ...(patched ? {} : { warning: "Undo may not be available" }) };
   } catch (e) {
     console.error("[MailReaper] markAsReceipt failed:", e);
     return { success: false, error: e.message };
@@ -732,13 +734,13 @@ async function handleMarkAsExpired(messageId) {
     await executeAction(msg, verdict);
 
     // Patch the activity log entry with undo info
-    await patchLastActivity(messageId, {
+    const patched = await patchLastActivity(messageId, {
       undoable: true,
       undoType: "expired",
       originalFolderId,
     });
 
-    return { success: true };
+    return { success: true, ...(patched ? {} : { warning: "Undo may not be available" }) };
   } catch (e) {
     console.error("[MailReaper] markAsExpired failed:", e);
     return { success: false, error: e.message };
@@ -790,6 +792,7 @@ async function handleSetManualExpiry(messageId, hours) {
  */
 async function patchLastActivity(messageId, patch) {
   try {
+    let found = false;
     await withLock(STORAGE_KEYS.ACTIVITY_LOG, async () => {
       const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
         await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
@@ -799,12 +802,15 @@ async function patchLastActivity(messageId, patch) {
       if (entry) {
         Object.assign(entry, patch);
         await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+        found = true;
       } else {
         console.warn(`[MailReaper] patchLastActivity: no log entry found for message ${messageId}`);
       }
     });
+    return found;
   } catch (e) {
     console.error("[MailReaper] patchLastActivity failed:", e);
+    return false;
   }
 }
 

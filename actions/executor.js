@@ -217,6 +217,13 @@ export async function cleanupGracePeriod() {
         // If the grace period has elapsed since the message was moved, delete permanently
         if (now - referenceDate > gracePeriodMs) {
           try {
+            // Verify message is still in this Expired folder before permanent delete
+            const currentMsg = await messenger.messages.get(msg.id);
+            if (!currentMsg || currentMsg.folder?.path !== expiredFolder.path) {
+              console.warn(`[MailReaper] Message ${msg.id} no longer in Expired folder, skipping deletion`);
+              continue;
+            }
+
             await messenger.messages.delete([msg.id], true); // true = skip trash, permanent delete
             cleanedCount++;
 

@@ -357,8 +357,8 @@ document.getElementById("btnSetExpiry").addEventListener("click", async () => {
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
-loadStatus();
-loadSelectedMessage();
+loadStatus().catch((e) => console.error("[MailReaper] Popup loadStatus failed:", e));
+loadSelectedMessage().catch((e) => console.error("[MailReaper] Popup loadSelectedMessage failed:", e));
 
 // Refresh every 10 seconds while popup is open
 setInterval(loadStatus, 10000);
