@@ -20,7 +20,7 @@ Debug via Thunderbird's Add-on Developer Tools console (debug button next to the
 1. Alarm fires → `runScan()` walks configured folders
 2. Each message evaluated against enabled rules sorted by priority (`rules/engine.js`)
 3. First matching rule wins → verdict returned with `{ expired, expiresAt, reason, confidence }`
-4. Actions executed (`actions/executor.js`): move to "Expired" folder, delete, or tag
+4. Actions executed (`actions/executor.js`): move to "Expired" or classification target folder (e.g. "Paper-Trail"), delete, or tag
 5. Separate 6-hour alarm runs grace period cleanup (permanent deletion)
 
 **Rule types** (`rules/engine.js` → `evaluateExpiration`):
@@ -37,7 +37,7 @@ Debug via Thunderbird's Add-on Developer Tools console (debug button next to the
 
 **Storage** (`rules/storage.js`): All state in `messenger.storage.local` under `mailreaper_*` keys. Settings merge with defaults on read so new settings are picked up on extension updates.
 
-**Inter-component communication**: All UI ↔ background communication goes through `messenger.runtime.sendMessage()` with a `type` field dispatch (see the `onMessage` listener in `background.js`).
+**Inter-component communication**: UI ↔ background communication goes through `messenger.runtime.sendMessage()` with a `type` field dispatch (see the `onMessage` listener in `background.js`). The options page also imports storage functions directly for operations like `saveRule` and `deleteRule`.
 
 ## Key Conventions
 
