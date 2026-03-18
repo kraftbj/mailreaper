@@ -41,7 +41,7 @@ export const DEFAULT_RULES = [
     action: "move",
     destination: null, // null = use default expired folder
     tag: null,
-    gracePeriodDays: 0,
+    gracePeriodDays: 1,
     builtin: true,
   },
   {
@@ -137,7 +137,7 @@ export const DEFAULT_RULES = [
       folders: [],
       senderPatterns: [],
       subjectPatterns: [],
-      headerMatch: { "Expires": "*" }, // Any value = header is present
+      headerMatch: {},
     },
     expiration: { type: "header" },
     action: "move",

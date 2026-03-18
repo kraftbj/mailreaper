@@ -239,6 +239,8 @@ export async function cleanupGracePeriod() {
         if (!movedAt) {
           continue;
         }
+        // Enforce minimum 1-day grace period to prevent premature permanent deletion from false positives.
+        gracePeriodDays = Math.max(1, gracePeriodDays);
         const referenceDate = movedAt;
         const gracePeriodMs = gracePeriodDays * 24 * 60 * 60 * 1000;
 

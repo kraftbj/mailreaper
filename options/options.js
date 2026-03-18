@@ -254,7 +254,7 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
       folders: [],
       senderPatterns,
       subjectPatterns,
-      headerMatch: expType === "header" ? { Expires: "*" } : {},
+      headerMatch: {},
     },
     expiration,
     action: document.getElementById("ruleAction").value,
