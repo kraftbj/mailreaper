@@ -116,7 +116,7 @@ mailreaper/
 - [ ] Drag-to-reorder rules in the UI (wired in storage, needs DnD in options.js)
 - [ ] "Create Rule from Examples" UI flow (LLM backend is ready in adapter.js)
 - [ ] Per-rule folder scoping (data model supports it, UI doesn't expose it yet)
-- [ ] Undo support for individual actions
+- [x] Undo support for individual actions
 - [ ] IMAP-specific edge cases (offline folders, slow connections)
 - [ ] ATN submission and review
 - [ ] Localization beyond English
