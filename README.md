@@ -12,15 +12,30 @@ MailReaper scans your configured email folders on a schedule and evaluates each 
 
 Expired emails are moved to an "Expired" folder, then permanently deleted after a configurable grace period.
 
-## Installation (Development)
+## Installation
+
+MailReaper is not yet available on [addons.thunderbird.net](https://addons.thunderbird.net). To install it, build the `.xpi` package and load it manually.
+
+### Building
+
+```bash
+make
+```
+
+This produces `mailreaper.xpi` in the project root.
+
+### Installing the .xpi
 
 1. Open Thunderbird
 2. Go to **Add-ons Manager** (Tools → Add-ons and Themes)
-3. Click the gear icon → **Debug Add-ons**
-4. Click **Load Temporary Add-on**
-5. Navigate to this directory and select `manifest.json`
+3. Click the gear icon → **Install Add-on From File…**
+4. Select `mailreaper.xpi`
 
-The extension will load and appear in the toolbar.
+### Loading for development
+
+1. Go to **Add-ons Manager** → gear icon → **Debug Add-ons**
+2. Click **Load Temporary Add-on**
+3. Select `manifest.json` from this directory
 
 ## Configuration
 
@@ -103,7 +118,7 @@ mailreaper/
 - [ ] Per-rule folder scoping (data model supports it, UI doesn't expose it yet)
 - [ ] Undo support for individual actions
 - [ ] IMAP-specific edge cases (offline folders, slow connections)
-- [ ] ATN submission packaging and review prep
+- [ ] ATN submission and review
 - [ ] Localization beyond English
 
 ## License
