@@ -191,6 +191,8 @@ export const DEFAULT_RULES = [
         "*@square.com",
         "*@stripe.com",
         "*@shopify.com",
+        "*@toast-restaurant.com",
+        "*@amazonses.com",
         "*@apple.com",
         "*@amazon.com",
         "*@google.com",
@@ -198,8 +200,6 @@ export const DEFAULT_RULES = [
         "*receipt*@*",
         "*billing*@*",
         "*invoice*@*",
-        "*noreply@*",
-        "*no-reply@*",
       ],
       subjectPatterns: [
         "*receipt*",
