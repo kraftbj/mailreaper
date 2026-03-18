@@ -344,22 +344,18 @@ let tagEnsured = false;
 async function ensureExpiredTag() {
   if (tagEnsured) return;
 
-  try {
-    const tags = await messenger.messages.tags.list();
-    const exists = tags.some((t) => t.key === MAILREAPER_TAG_KEY);
+  const tags = await messenger.messages.tags.list();
+  const exists = tags.some((t) => t.key === MAILREAPER_TAG_KEY);
 
-    if (!exists) {
-      await messenger.messages.tags.create(
-        MAILREAPER_TAG_KEY,
-        "Expired (MailReaper)",
-        "#999999"
-      );
-    }
-
-    tagEnsured = true;
-  } catch (e) {
-    console.error("[MailReaper] Failed to create tag:", e);
+  if (!exists) {
+    await messenger.messages.tags.create(
+      MAILREAPER_TAG_KEY,
+      "Expired (MailReaper)",
+      "#999999"
+    );
   }
+
+  tagEnsured = true;
 }
 
 export { EXPIRED_FOLDER_NAME, getOrCreateNamedFolder };

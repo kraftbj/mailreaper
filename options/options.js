@@ -568,4 +568,10 @@ async function init() {
   await loadLlm();
 }
 
-init().catch((e) => console.error("Options init failed:", e));
+init().catch((e) => {
+  console.error("Options init failed:", e);
+  const banner = document.createElement("div");
+  banner.style.cssText = "background:#fee;color:#c00;padding:12px;margin:12px;border-radius:6px;font-weight:bold;";
+  banner.textContent = `Failed to load settings: ${e.message}. Try reloading the page.`;
+  document.body.prepend(banner);
+});
