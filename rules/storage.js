@@ -12,7 +12,10 @@ async function withLock(key, fn) {
   const next = prev.then(fn, fn);
   _locks.set(key, next);
   // Clean up after completion so the map doesn't grow
-  next.then(() => { if (_locks.get(key) === next) _locks.delete(key); });
+  next.then(
+    () => { if (_locks.get(key) === next) _locks.delete(key); },
+    () => { if (_locks.get(key) === next) _locks.delete(key); }
+  );
   return next;
 }
 
@@ -136,51 +139,57 @@ export async function getRule(ruleId) {
 }
 
 export async function saveRule(rule) {
-  const rules = await getRules();
-  const index = rules.findIndex((r) => r.id === rule.id);
+  return withLock(STORAGE_KEYS.RULES, async () => {
+    const rules = await getRules();
+    const index = rules.findIndex((r) => r.id === rule.id);
 
-  if (index >= 0) {
-    rules[index] = { ...rules[index], ...rule };
-  } else {
-    // New rule — assign ID if missing
-    if (!rule.id) {
-      rule.id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (index >= 0) {
+      rules[index] = { ...rules[index], ...rule };
+    } else {
+      // New rule — assign ID if missing
+      if (!rule.id) {
+        rule.id = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      }
+      rules.push(rule);
     }
-    rules.push(rule);
-  }
 
-  await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: rules });
-  return rule;
+    await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: rules });
+    return rule;
+  });
 }
 
 export async function deleteRule(ruleId) {
-  const rules = await getRules();
-  const filtered = rules.filter((r) => r.id !== ruleId);
-  await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: filtered });
+  return withLock(STORAGE_KEYS.RULES, async () => {
+    const rules = await getRules();
+    const filtered = rules.filter((r) => r.id !== ruleId);
+    await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: filtered });
+  });
 }
 
 export async function reorderRules(orderedIds) {
-  const rules = await getRules();
-  const ruleMap = new Map(rules.map((r) => [r.id, r]));
-  const reordered = orderedIds
-    .map((id, i) => {
-      const rule = ruleMap.get(id);
-      if (rule) {
-        rule.priority = (i + 1) * 10;
-        return rule;
+  return withLock(STORAGE_KEYS.RULES, async () => {
+    const rules = await getRules();
+    const ruleMap = new Map(rules.map((r) => [r.id, r]));
+    const reordered = orderedIds
+      .map((id, i) => {
+        const rule = ruleMap.get(id);
+        if (rule) {
+          rule.priority = (i + 1) * 10;
+          return rule;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // Append any rules not in the ordered list (shouldn't happen, but safety)
+    for (const rule of rules) {
+      if (!orderedIds.includes(rule.id)) {
+        reordered.push(rule);
       }
-      return null;
-    })
-    .filter(Boolean);
-
-  // Append any rules not in the ordered list (shouldn't happen, but safety)
-  for (const rule of rules) {
-    if (!orderedIds.includes(rule.id)) {
-      reordered.push(rule);
     }
-  }
 
-  await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: reordered });
+    await messenger.storage.local.set({ [STORAGE_KEYS.RULES]: reordered });
+  });
 }
 
 export async function resetRulesToDefaults() {
@@ -294,11 +303,13 @@ export async function setCachedVerdict(messageIdHeader, verdict) {
 }
 
 export async function removeCachedVerdict(messageIdHeader) {
-  const { [STORAGE_KEYS.LLM_CACHE]: cache } =
-    await messenger.storage.local.get(STORAGE_KEYS.LLM_CACHE);
-  if (!cache || !cache[messageIdHeader]) return;
-  delete cache[messageIdHeader];
-  await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: cache });
+  return withLock(STORAGE_KEYS.LLM_CACHE, async () => {
+    const { [STORAGE_KEYS.LLM_CACHE]: cache } =
+      await messenger.storage.local.get(STORAGE_KEYS.LLM_CACHE);
+    if (!cache || !cache[messageIdHeader]) return;
+    delete cache[messageIdHeader];
+    await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: cache });
+  });
 }
 
 export async function clearLlmCache() {
@@ -314,15 +325,19 @@ export async function getManualOverrides() {
 }
 
 export async function setManualOverride(messageIdHeader, override) {
-  const overrides = await getManualOverrides();
-  overrides[messageIdHeader] = override;
-  await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+  return withLock(STORAGE_KEYS.MANUAL_OVERRIDES, async () => {
+    const overrides = await getManualOverrides();
+    overrides[messageIdHeader] = override;
+    await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+  });
 }
 
 export async function removeManualOverride(messageIdHeader) {
-  const overrides = await getManualOverrides();
-  delete overrides[messageIdHeader];
-  await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+  return withLock(STORAGE_KEYS.MANUAL_OVERRIDES, async () => {
+    const overrides = await getManualOverrides();
+    delete overrides[messageIdHeader];
+    await messenger.storage.local.set({ [STORAGE_KEYS.MANUAL_OVERRIDES]: overrides });
+  });
 }
 
 // ── Training Examples ────────────────────────────────────────────────────────
@@ -330,18 +345,20 @@ export async function removeManualOverride(messageIdHeader) {
 const MAX_TRAINING_EXAMPLES = 100;
 
 export async function addTrainingExample(example) {
-  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
-    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
-  const examples = all || [];
+  return withLock(STORAGE_KEYS.TRAINING_EXAMPLES, async () => {
+    const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+      await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+    const examples = all || [];
 
-  examples.push({ ...example, addedAt: new Date().toISOString() });
+    examples.push({ ...example, addedAt: new Date().toISOString() });
 
-  // Cap at MAX_TRAINING_EXAMPLES (keep most recent)
-  while (examples.length > MAX_TRAINING_EXAMPLES) {
-    examples.shift();
-  }
+    // Cap at MAX_TRAINING_EXAMPLES (keep most recent)
+    while (examples.length > MAX_TRAINING_EXAMPLES) {
+      examples.shift();
+    }
 
-  await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: examples });
+    await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: examples });
+  });
 }
 
 export async function getTrainingExamples(category) {
@@ -352,18 +369,20 @@ export async function getTrainingExamples(category) {
 }
 
 export async function removeTrainingExampleBySubject(subject) {
-  const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
-    await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
-  if (!all || all.length === 0) return;
+  return withLock(STORAGE_KEYS.TRAINING_EXAMPLES, async () => {
+    const { [STORAGE_KEYS.TRAINING_EXAMPLES]: all } =
+      await messenger.storage.local.get(STORAGE_KEYS.TRAINING_EXAMPLES);
+    if (!all || all.length === 0) return;
 
-  // Remove the most recent example matching this subject
-  for (let i = all.length - 1; i >= 0; i--) {
-    if (all[i].subject === subject) {
-      all.splice(i, 1);
-      await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: all });
-      return;
+    // Remove the most recent example matching this subject
+    for (let i = all.length - 1; i >= 0; i--) {
+      if (all[i].subject === subject) {
+        all.splice(i, 1);
+        await messenger.storage.local.set({ [STORAGE_KEYS.TRAINING_EXAMPLES]: all });
+        return;
+      }
     }
-  }
+  });
 }
 
 export async function clearTrainingExamples(category) {
@@ -379,4 +398,4 @@ export async function clearTrainingExamples(category) {
 
 // ── Export all storage keys for debugging ────────────────────────────────────
 
-export { STORAGE_KEYS, DEFAULT_SETTINGS };
+export { STORAGE_KEYS, DEFAULT_SETTINGS, withLock };
