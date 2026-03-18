@@ -181,13 +181,13 @@ export async function cleanupGracePeriod() {
 
       // Get all messages in the Expired folder
       const messageList = await messenger.messages.list(expiredFolder.id);
-      let messages = messageList.messages;
+      let messages = messageList.messages || [];
 
       // Also get continuation pages
       let page = messageList;
       while (page.id) {
         page = await messenger.messages.continueList(page.id);
-        messages = messages.concat(page.messages);
+        messages = messages.concat(page.messages || []);
       }
 
       const now = Date.now();
@@ -265,7 +265,7 @@ export async function cleanupGracePeriod() {
 
 /**
  * Find or create a named folder for an account.
- * Tries root level first, then under a "Folders" or "Labels" parent (Proton Mail).
+ * Looks for a "Folders" or "Labels" parent first (Proton Mail), then falls back to root.
  */
 async function getOrCreateNamedFolder(accountId, folderName) {
   const cacheKey = `${accountId}:${folderName}`;

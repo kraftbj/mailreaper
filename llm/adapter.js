@@ -147,6 +147,11 @@ async function callGemini(prompt, settings) {
     }
 
     return parseJsonResponse(text);
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error("LLM request timed out after 30 seconds");
+    }
+    throw e;
   } finally {
     clearTimeout(timeout);
   }
@@ -193,6 +198,11 @@ async function callOllama(prompt, settings) {
       throw new Error("Empty response from Ollama");
     }
     return parseJsonResponse(data.response);
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error("LLM request timed out after 30 seconds");
+    }
+    throw e;
   } finally {
     clearTimeout(timeout);
   }
