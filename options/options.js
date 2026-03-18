@@ -261,9 +261,14 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
 
 document.getElementById("btnDeleteRule").addEventListener("click", async () => {
   if (editingRuleId && confirm("Delete this rule?")) {
-    await deleteRule(editingRuleId);
-    document.getElementById("ruleEditor").hidden = true;
-    await loadRules();
+    try {
+      await deleteRule(editingRuleId);
+      document.getElementById("ruleEditor").hidden = true;
+      await loadRules();
+    } catch (e) {
+      console.error("Failed to delete rule:", e);
+      showSaveStatus("ruleSaveStatus", `Delete failed: ${e.message}`);
+    }
   }
 });
 

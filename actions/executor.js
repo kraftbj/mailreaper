@@ -73,10 +73,6 @@ async function moveToFolder(message, verdict, settings) {
     folderId = destinationId || await getOrCreateNamedFolder(message.folder.accountId, EXPIRED_FOLDER_NAME);
   }
 
-  if (!folderId) {
-    throw new Error("Could not determine destination folder");
-  }
-
   await messenger.messages.move([message.id], folderId);
 
   // Store move timestamp and per-rule grace period for cleanup
@@ -252,7 +248,9 @@ export async function cleanupGracePeriod() {
     console.error("[MailReaper] Grace period cleanup failed:", e);
     try {
       await logActivity({ type: "error", action: "cleanup", reason: `Grace period cleanup failed: ${e.message}`, timestamp: Date.now() });
-    } catch { /* don't let logging failure mask the original error */ }
+    } catch (logErr) {
+      console.error("[MailReaper] Failed to log cleanup error:", logErr);
+    }
   }
 }
 
@@ -273,7 +271,7 @@ async function getOrCreateNamedFolder(accountId, folderName) {
 
   if (!folder) {
     const account = await messenger.accounts.get(accountId, true);
-    if (!account) return null;
+    if (!account) throw new Error("Account not found for folder creation");
 
     const rootFolders = account.rootFolder?.subFolders || [];
 
@@ -285,8 +283,7 @@ async function getOrCreateNamedFolder(accountId, folderName) {
     const parentId = foldersParent ? foldersParent.id : account.rootFolder?.id;
 
     if (!parentId) {
-      console.error(`[MailReaper] Cannot determine parent folder for "${folderName}"`);
-      return null;
+      throw new Error("Account has no root folder");
     }
 
     try {
@@ -300,11 +297,10 @@ async function getOrCreateNamedFolder(accountId, folderName) {
           folder = await messenger.folders.create(account.rootFolder.id, folderName);
           console.log(`[MailReaper] Created "${folderName}" folder (fallback)`);
         } catch (e2) {
-          console.error(`[MailReaper] Fallback folder creation also failed:`, e2);
-          return null;
+          throw new Error(`Failed to create "${folderName}" folder (fallback): ${e2.message}`);
         }
       } else {
-        return null;
+        throw new Error(`Failed to create "${folderName}" folder: ${e.message}`);
       }
     }
   }
@@ -314,7 +310,7 @@ async function getOrCreateNamedFolder(accountId, folderName) {
     return folder.id;
   }
 
-  return null;
+  throw new Error(`Could not find parent folder for creation`);
 }
 
 /**

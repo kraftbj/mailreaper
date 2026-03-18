@@ -157,6 +157,10 @@ async function callGemini(prompt, settings) {
 async function callOllama(prompt, settings) {
   const { ollamaEndpoint, ollamaModel } = settings;
 
+  if (!ollamaEndpoint) {
+    throw new Error("Ollama endpoint not configured");
+  }
+
   const endpoint = `${ollamaEndpoint}/api/generate`;
 
   const controller = new AbortController();
@@ -207,6 +211,9 @@ function parseJsonResponse(text) {
     const parsed = JSON.parse(cleaned);
 
     // Validate and normalize the response shape
+    if (parsed.confidence === undefined && parsed.score === undefined) {
+      console.warn("[MailReaper] LLM response missing confidence field, defaulting to 0.5");
+    }
     const rawConfidence = Number(parsed.confidence ?? parsed.score ?? 0.5);
     const confidence = Number.isNaN(rawConfidence) ? 0.5 : Math.max(0, Math.min(1, rawConfidence));
 
