@@ -4,6 +4,15 @@
 
 import { saveRule, deleteRule, getRules, reorderRules, resetRulesToDefaults } from "../rules/storage.js";
 
+function parseIntSafe(value, fallback) {
+  const n = parseInt(value, 10);
+  return isNaN(n) || n <= 0 ? fallback : n;
+}
+function parseFloatSafe(value, fallback) {
+  const n = parseFloat(value);
+  return isNaN(n) || n < 0 ? fallback : n;
+}
+
 let currentSettings = {};
 let currentRules = [];
 let editingRuleId = null;
@@ -43,10 +52,10 @@ document.getElementById("btnSaveGeneral").addEventListener("click", async () => 
       type: "updateSettings",
       settings: {
         scanEnabled: document.getElementById("scanEnabled").checked,
-        scanIntervalMinutes: parseInt(document.getElementById("scanInterval").value),
-        minMessageAgeMinutes: parseInt(document.getElementById("minAge").value),
-        maxMessagesPerScan: parseInt(document.getElementById("maxPerScan").value),
-        defaultGracePeriodDays: parseInt(document.getElementById("gracePeriod").value),
+        scanIntervalMinutes: parseIntSafe(document.getElementById("scanInterval").value, 30),
+        minMessageAgeMinutes: parseIntSafe(document.getElementById("minAge").value, 60),
+        maxMessagesPerScan: parseIntSafe(document.getElementById("maxPerScan").value, 100),
+        defaultGracePeriodDays: parseIntSafe(document.getElementById("gracePeriod").value, 7),
         gracePeriodCleanupEnabled: document.getElementById("graceCleanup").checked,
         notifyOnExpiration: document.getElementById("notifyExpiration").checked,
       },
@@ -207,7 +216,7 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
 
   const expType = document.getElementById("ruleExpirationType").value;
   const expiration = { type: expType };
-  if (expType === "ttl") expiration.hours = parseFloat(document.getElementById("ruleTtlHours").value);
+  if (expType === "ttl") expiration.hours = parseFloatSafe(document.getElementById("ruleTtlHours").value, 2);
   if (expType === "content-regex") expiration.pattern = document.getElementById("ruleRegex").value;
   if (expType === "llm" || expType === "llm-classify") expiration.prompt = document.getElementById("ruleLlmPrompt").value || undefined;
   if (expType === "llm-classify") expiration.category = document.getElementById("ruleClassifyCategory").value;
@@ -234,7 +243,7 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
     destination: null,
     ...(classifyFolder && { classifyFolder }),
     tag: null,
-    gracePeriodDays: parseInt(document.getElementById("ruleGracePeriod").value),
+    gracePeriodDays: parseIntSafe(document.getElementById("ruleGracePeriod").value, 7),
     builtin: editingRuleId
       ? (currentRules.find((r) => r.id === editingRuleId)?.builtin || false)
       : false,
@@ -302,8 +311,8 @@ document.getElementById("btnSaveLlm").addEventListener("click", async () => {
         ollamaEndpoint: document.getElementById("ollamaEndpoint").value,
         ollamaModel: document.getElementById("ollamaModel").value,
         llmMetadataOnly: document.getElementById("llmMetadataOnly").checked,
-        llmMaxSnippetLength: parseInt(document.getElementById("llmMaxSnippet").value),
-        llmConfidenceThreshold: parseFloat(document.getElementById("llmConfidence").value),
+        llmMaxSnippetLength: parseIntSafe(document.getElementById("llmMaxSnippet").value, 2000),
+        llmConfidenceThreshold: parseFloatSafe(document.getElementById("llmConfidence").value, 0.7),
       },
     });
     showSaveStatus("llmSaveStatus");
