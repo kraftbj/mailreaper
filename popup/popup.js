@@ -115,7 +115,7 @@ function renderActivity(entries) {
     <div class="activity-item${entry.undone ? " activity-undone" : ""}">
       <span class="activity-icon">${ACTION_ICONS[entry.type] || "•"}</span>
       <span class="activity-text" title="${escapeHtml(entry.subject || "")}">${escapeHtml(truncate(entry.subject || "Unknown", 30))}</span>
-      ${entry.undoable ? `<button class="undo-btn" data-undo-index="${i}">undo</button>` : ""}
+      ${entry.undoable ? `<button class="undo-btn" data-undo-id="${entry.id}">undo</button>` : ""}
       ${entry.undone ? `<span class="activity-time">undone</span>` : `<span class="activity-time">${formatRelativeTime(new Date(entry.timestamp))}</span>`}
     </div>
   `
@@ -126,13 +126,13 @@ function renderActivity(entries) {
   container.querySelectorAll(".undo-btn").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.preventDefault();
-      const index = parseInt(btn.dataset.undoIndex, 10);
+      const logId = btn.dataset.undoId;
       btn.disabled = true;
       btn.textContent = "...";
       try {
         const result = await messenger.runtime.sendMessage({
           type: "undoManualAction",
-          logIndex: index,
+          logId,
         });
         if (result?.success) {
           await loadStatus();

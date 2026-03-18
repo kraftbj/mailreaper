@@ -310,9 +310,21 @@ async function runScan() {
             if (verdict && (verdict.expired || verdict.classified)) {
               await executeAction(message, verdict);
               expired++;
-            } else {
+            } else if (!verdict?.hasLlmError) {
+              // Only cache no-match if there was no LLM error — LLM errors
+              // are cached with a short TTL, so the message should be
+              // re-evaluated on the next scan after the error cache expires.
               const trace = verdict?.trace || [];
               evaluatedNoMatch.set(message.id, { fingerprint, trace });
+
+              if (evaluatedNoMatch.size > 10000) {
+                const excess = evaluatedNoMatch.size - 10000;
+                let count = 0;
+                for (const key of evaluatedNoMatch.keys()) {
+                  if (count++ >= excess) break;
+                  evaluatedNoMatch.delete(key);
+                }
+              }
             }
           } catch (e) {
             errors++;
@@ -484,7 +496,7 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
         return handleSetManualExpiry(message.messageId, message.hours);
 
       case "undoManualAction":
-        return handleUndoManualAction(message.logIndex);
+        return handleUndoManualAction(message.logId);
 
       case "getMessageInfo":
         return getMessageInfo(message.messageId);
@@ -796,15 +808,18 @@ async function patchLastActivity(messageId, patch) {
   }
 }
 
-async function handleUndoManualAction(logIndex) {
+async function handleUndoManualAction(logId) {
   try {
     const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
       await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-    if (!log || !log[logIndex]) {
+    if (!log) {
       return { success: false, error: "Activity entry not found" };
     }
 
-    const entry = log[logIndex];
+    const entry = log.find((e) => e.id === logId);
+    if (!entry) {
+      return { success: false, error: "Activity entry not found" };
+    }
     if (!entry.undoable) {
       return { success: false, error: "This action cannot be undone" };
     }

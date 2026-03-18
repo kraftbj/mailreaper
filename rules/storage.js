@@ -230,6 +230,7 @@ export async function logActivity(entry) {
 
     entries.unshift({
       ...entry,
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
       timestamp: new Date().toISOString(),
     });
 

@@ -10,14 +10,14 @@ import { analyzeMessageWithLlm, classifyMessageWithLlm } from "../llm/adapter.js
 
 /**
  * Evaluate a single message against all enabled rules (in priority order).
- * Returns the first matching verdict, or null if no rule matches.
+ * Returns the first matching verdict, or `{ noMatch: true, trace }` if no rule matches.
  *
  * fullMessage and bodyText are fetched lazily — only when a rule needs them.
  *
  * @param {object} message - Thunderbird MessageHeader object
  * @param {function} getFullMessage - async function returning messages.getFull() result
  * @param {function} getBodyText - async function returning plain text body
- * @returns {Promise<object|null>} Verdict or null
+ * @returns {Promise<object>} Verdict object (with noMatch: true if no rule matched)
  */
 export async function evaluateMessage(message, getFullMessage, getBodyText) {
   const rules = await getRules();
@@ -46,6 +46,7 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
 
   // Track which rules were evaluated for debugging
   const trace = [];
+  let hasLlmError = false;
 
   for (const rule of enabledRules) {
     // Check if message matches this rule's criteria (uses only MessageHeader data)
@@ -64,13 +65,18 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
       settings
     );
 
+    if (verdict && verdict.llmError) {
+      hasLlmError = true;
+      continue;
+    }
+
     if (verdict) {
       verdict.trace = trace;
       return verdict;
     }
   }
 
-  return { noMatch: true, trace };
+  return { noMatch: true, hasLlmError, trace };
 }
 
 /**
@@ -267,6 +273,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
             reason: `Error: ${e.message || "LLM call failed"}`,
           });
         }
+        return { llmError: true };
       }
       return null;
     }
@@ -335,6 +342,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
             reason: `Error: ${e.message || "LLM classify failed"}`,
           });
         }
+        return { llmError: true };
       }
       return null;
     }
