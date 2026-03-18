@@ -2,7 +2,7 @@
  * Rule Engine — evaluates messages against rules to determine expiration.
  *
  * Returns a verdict for each message:
- * { expired, rule, expiresAt, reason, confidence, classified, trace }
+ * { expired, rule, expiresAt, reason, confidence, classified, noMatch, trace }
  */
 
 import { getRules, getSettings, getCachedVerdict, setCachedVerdict, getTrainingExamples } from "./storage.js";

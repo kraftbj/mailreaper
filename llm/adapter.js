@@ -10,6 +10,7 @@ import { buildAnalysisPrompt, buildRuleGenerationPrompt, buildClassificationProm
  *
  * @param {object} messageData - { sender, subject, sentDate, bodySnippet, customPrompt }
  * @param {object} settings - Extension settings (provider, keys, endpoints)
+ * @param {Array<object>} examples - Training examples for few-shot prompting
  * @returns {Promise<object>} { isTimeSensitive, expiresAt, reason, confidence }
  */
 export async function analyzeMesageWithLlm(messageData, settings, examples) {
@@ -30,6 +31,7 @@ export async function analyzeMesageWithLlm(messageData, settings, examples) {
  *
  * @param {object} messageData - { sender, subject, sentDate, bodySnippet, category, customPrompt }
  * @param {object} settings - Extension settings
+ * @param {Array<object>} examples - Training examples for few-shot prompting
  * @returns {Promise<object>} { matches, reason, confidence }
  */
 export async function classifyMessageWithLlm(messageData, settings, examples) {

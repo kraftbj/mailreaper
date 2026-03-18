@@ -15,7 +15,7 @@ let folderCache = new Map();
  * Execute the action specified by a rule's verdict on a message.
  *
  * @param {object} message - Thunderbird MessageHeader
- * @param {object} verdict - { expired, rule, expiresAt, reason, confidence }
+ * @param {object} verdict - { expired, rule, expiresAt, reason, confidence, classified }
  */
 export async function executeAction(message, verdict) {
   const { rule } = verdict;

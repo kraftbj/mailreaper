@@ -5,6 +5,17 @@
 
 import { DEFAULT_RULES } from "./defaults.js";
 
+// Simple per-key write queue to prevent read-modify-write race conditions.
+const _locks = new Map();
+async function withLock(key, fn) {
+  const prev = _locks.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  _locks.set(key, next);
+  // Clean up after completion so the map doesn't grow
+  next.then(() => { if (_locks.get(key) === next) _locks.delete(key); });
+  return next;
+}
+
 const STORAGE_KEYS = {
   RULES: "mailreaper_rules",
   SETTINGS: "mailreaper_settings",
@@ -202,22 +213,24 @@ export async function getActivityLog(limit = 50) {
 }
 
 export async function logActivity(entry) {
-  const settings = await getSettings();
-  const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
-    await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-  const entries = log || [];
+  return withLock(STORAGE_KEYS.ACTIVITY_LOG, async () => {
+    const settings = await getSettings();
+    const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+      await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+    const entries = log || [];
 
-  entries.unshift({
-    ...entry,
-    timestamp: new Date().toISOString(),
+    entries.unshift({
+      ...entry,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Trim to max
+    while (entries.length > settings.activityLogMaxEntries) {
+      entries.pop();
+    }
+
+    await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: entries });
   });
-
-  // Trim to max
-  while (entries.length > settings.activityLogMaxEntries) {
-    entries.pop();
-  }
-
-  await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: entries });
 }
 
 export async function clearActivityLog() {
@@ -258,24 +271,26 @@ export async function getCachedVerdict(messageIdHeader) {
 }
 
 export async function setCachedVerdict(messageIdHeader, verdict) {
-  const { [STORAGE_KEYS.LLM_CACHE]: cache } =
-    await messenger.storage.local.get(STORAGE_KEYS.LLM_CACHE);
-  const updated = cache || {};
+  return withLock(STORAGE_KEYS.LLM_CACHE, async () => {
+    const { [STORAGE_KEYS.LLM_CACHE]: cache } =
+      await messenger.storage.local.get(STORAGE_KEYS.LLM_CACHE);
+    const updated = cache || {};
 
-  updated[messageIdHeader] = {
-    verdict,
-    cachedAt: Date.now(),
-  };
+    updated[messageIdHeader] = {
+      verdict,
+      cachedAt: Date.now(),
+    };
 
-  // Prune old entries (keep last 5000)
-  const entries = Object.entries(updated);
-  if (entries.length > 5000) {
-    entries.sort((a, b) => b[1].cachedAt - a[1].cachedAt);
-    const pruned = Object.fromEntries(entries.slice(0, 5000));
-    await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: pruned });
-  } else {
-    await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: updated });
-  }
+    // Prune oldest entries when cache exceeds 5000 (by insertion time)
+    const entries = Object.entries(updated);
+    if (entries.length > 5000) {
+      entries.sort((a, b) => b[1].cachedAt - a[1].cachedAt);
+      const pruned = Object.fromEntries(entries.slice(0, 5000));
+      await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: pruned });
+    } else {
+      await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: updated });
+    }
+  });
 }
 
 export async function removeCachedVerdict(messageIdHeader) {
