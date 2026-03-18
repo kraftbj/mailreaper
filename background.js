@@ -332,11 +332,15 @@ async function runScan() {
 
     // Send notification if configured and any expired
     if (settings.notifyOnExpiration && expired > 0) {
-      await messenger.notifications.create(`mailreaper-scan-${Date.now()}`, {
-        type: "basic",
-        title: "MailReaper",
-        message: `Cleaned up ${expired} expired email${expired !== 1 ? "s" : ""}.`,
-      });
+      try {
+        await messenger.notifications.create(`mailreaper-scan-${Date.now()}`, {
+          type: "basic",
+          title: "MailReaper",
+          message: `Cleaned up ${expired} expired email${expired !== 1 ? "s" : ""}.`,
+        });
+      } catch (notifErr) {
+        console.warn("[MailReaper] Notification failed:", notifErr);
+      }
     }
   } catch (e) {
     lastScanError = e.message;
