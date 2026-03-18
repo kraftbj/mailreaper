@@ -1,7 +1,8 @@
 /**
  * Rule Engine — evaluates messages against rules to determine expiration.
  *
- * Returns a verdict for each message: { expired: bool, rule, expiresAt, reason }
+ * Returns a verdict for each message:
+ * { expired, rule, expiresAt, reason, confidence, classified, trace }
  */
 
 import { getRules, getSettings, getCachedVerdict, setCachedVerdict, getTrainingExamples } from "./storage.js";
@@ -140,26 +141,25 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
     }
 
     case "header": {
-      // Need full message to read the Expires header
+      // Early-exit: fetch headers and bail immediately if no Expires header.
+      // The builtin Expires rule has no sender/subject patterns, so it matches
+      // every message in matchesRule(). This check avoids wasted work for the
+      // vast majority of messages that lack the header.
       const fullMessage = await lazyFull();
       const expiresHeader = getHeader(fullMessage, "Expires");
       if (!expiresHeader) return null;
 
-      try {
-        const expiresAt = new Date(expiresHeader);
-        if (isNaN(expiresAt.getTime())) return null;
+      const expiresAt = new Date(expiresHeader);
+      if (isNaN(expiresAt.getTime())) return null;
 
-        if (now > expiresAt) {
-          return {
-            expired: true,
-            rule,
-            expiresAt: expiresAt.toISOString(),
-            reason: `Expires header: ${expiresHeader}`,
-            confidence: 1.0,
-          };
-        }
-      } catch {
-        console.warn(`[MailReaper] Invalid Expires header: ${expiresHeader}`);
+      if (now > expiresAt) {
+        return {
+          expired: true,
+          rule,
+          expiresAt: expiresAt.toISOString(),
+          reason: `Expires header: ${expiresHeader}`,
+          confidence: 1.0,
+        };
       }
       return null;
     }
@@ -371,7 +371,8 @@ function globMatch(str, pattern) {
 
   try {
     return new RegExp(`^${regexStr}$`).test(str);
-  } catch {
+  } catch (e) {
+    console.warn(`[MailReaper] Invalid glob pattern "${pattern}":`, e);
     return false;
   }
 }

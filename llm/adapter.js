@@ -168,6 +168,9 @@ async function callOllama(prompt, settings) {
     }
 
     const data = await response.json();
+    if (!data.response) {
+      throw new Error("Empty response from Ollama");
+    }
     return parseJsonResponse(data.response);
   } finally {
     clearTimeout(timeout);
