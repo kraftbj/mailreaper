@@ -60,10 +60,16 @@ async function moveToFolder(message, verdict, settings) {
   if (rule.destination) {
     folderId = rule.destination;
   } else if (verdict.classified) {
+    if (!message.folder?.accountId) {
+      throw new Error(`Message ${message.id} has no folder or account — may have been moved or deleted`);
+    }
     const folderName = rule.classifyFolder || "Paper-Trail";
     folderId = await getOrCreateNamedFolder(message.folder.accountId, folderName);
   } else {
     const destinationId = settings.expiredFolderId;
+    if (!message.folder?.accountId) {
+      throw new Error(`Message ${message.id} has no folder or account — may have been moved or deleted`);
+    }
     folderId = destinationId || await getOrCreateNamedFolder(message.folder.accountId, EXPIRED_FOLDER_NAME);
   }
 
@@ -244,6 +250,9 @@ export async function cleanupGracePeriod() {
     }
   } catch (e) {
     console.error("[MailReaper] Grace period cleanup failed:", e);
+    try {
+      await logActivity({ type: "error", action: "cleanup", reason: `Grace period cleanup failed: ${e.message}`, timestamp: Date.now() });
+    } catch { /* don't let logging failure mask the original error */ }
   }
 }
 
@@ -251,7 +260,7 @@ export async function cleanupGracePeriod() {
 
 /**
  * Find or create a named folder for an account.
- * Tries root level first, then under a "Folders" parent (Proton Mail).
+ * Tries root level first, then under a "Folders" or "Labels" parent (Proton Mail).
  */
 async function getOrCreateNamedFolder(accountId, folderName) {
   const cacheKey = `${accountId}:${folderName}`;
@@ -312,15 +321,10 @@ async function getOrCreateNamedFolder(accountId, folderName) {
  * Find a named folder anywhere in an account's folder tree.
  */
 async function findNamedFolder(accountId, folderName) {
-  try {
-    const account = await messenger.accounts.get(accountId, true);
-    if (!account || !account.rootFolder) return null;
+  const account = await messenger.accounts.get(accountId, true);
+  if (!account || !account.rootFolder) return null;
 
-    return findFolderByName(account.rootFolder.subFolders || [], folderName);
-  } catch (e) {
-    console.error(`[MailReaper] Error finding "${folderName}" folder:`, e);
-    return null;
-  }
+  return findFolderByName(account.rootFolder.subFolders || [], folderName);
 }
 
 /**

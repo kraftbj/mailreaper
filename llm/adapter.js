@@ -136,7 +136,11 @@ async function callGemini(prompt, settings) {
     }
 
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const candidate = data.candidates?.[0];
+    if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+      throw new Error(`Gemini refused to respond (reason: ${candidate.finishReason})`);
+    }
+    const text = candidate?.content?.parts?.[0]?.text;
 
     if (!text) {
       throw new Error("Empty response from Gemini");

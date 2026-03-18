@@ -249,9 +249,14 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
       : false,
   };
 
-  await saveRule(rule);
-  document.getElementById("ruleEditor").hidden = true;
-  await loadRules();
+  try {
+    await saveRule(rule);
+    document.getElementById("ruleEditor").hidden = true;
+    await loadRules();
+  } catch (e) {
+    console.error("Failed to save rule:", e);
+    showSaveStatus("ruleSaveStatus", `Save failed: ${e.message}`);
+  }
 });
 
 document.getElementById("btnDeleteRule").addEventListener("click", async () => {

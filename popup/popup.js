@@ -94,6 +94,10 @@ async function loadStatus() {
     renderActivity(activityLog);
   } catch (e) {
     console.error("Failed to load status:", e);
+    const dot = document.getElementById("statusDot");
+    if (dot) dot.className = "status-dot error";
+    const lastScan = document.getElementById("lastScan");
+    if (lastScan) lastScan.textContent = "Could not connect to MailReaper";
   }
 }
 
