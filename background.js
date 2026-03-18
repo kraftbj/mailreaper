@@ -239,8 +239,6 @@ async function runScan() {
 
         for (const message of candidates) {
           if (processed >= settings.maxMessagesPerScan) break;
-          processed++;
-          updateProgress();
 
           try {
             // Check manual overrides (user-set expiry takes priority)
@@ -269,6 +267,9 @@ async function runScan() {
               continue;
             }
 
+            processed++;
+            updateProgress();
+
             // Evaluate against rules — full message data is fetched lazily
             // only when a rule actually needs it (e.g. Expires header, LLM)
             const verdict = await evaluateMessage(
@@ -278,7 +279,8 @@ async function runScan() {
                 try {
                   const parts = await messenger.messages.listInlineTextParts(message.id);
                   return parts.map((p) => p.content).join("\n");
-                } catch {
+                } catch (e) {
+                  console.warn(`[MailReaper] Failed to get body text for message ${message.id}:`, e);
                   return "";
                 }
               }
@@ -601,8 +603,8 @@ async function handleMarkAsReceipt(messageId) {
     try {
       const parts = await messenger.messages.listInlineTextParts(messageId);
       bodySnippet = parts.map((p) => p.content).join("\n").substring(0, 500);
-    } catch {
-      // Body not available — proceed without it
+    } catch (e) {
+      console.warn(`[MailReaper] Failed to get body text for message ${messageId}:`, e);
     }
 
     // Store training example
@@ -652,8 +654,8 @@ async function handleMarkAsExpired(messageId) {
     try {
       const parts = await messenger.messages.listInlineTextParts(messageId);
       bodySnippet = parts.map((p) => p.content).join("\n").substring(0, 500);
-    } catch {
-      // Body not available — proceed without it
+    } catch (e) {
+      console.warn(`[MailReaper] Failed to get body text for message ${messageId}:`, e);
     }
 
     // Store as an expiry training example so the LLM learns from it
@@ -765,8 +767,18 @@ async function handleUndoManualAction(logIndex) {
 
   try {
     if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
+      // Look up the message's current ID — Thunderbird changes IDs after moves,
+      // so entry.messageId is stale. Query by headerMessageId instead.
+      let currentMessageId = entry.messageId;
+      if (entry.headerMessageId) {
+        const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
+        if (results.messages && results.messages.length > 0) {
+          currentMessageId = results.messages[0].id;
+        }
+      }
+
       // Move message back to original folder
-      await messenger.messages.move([entry.messageId], entry.originalFolderId);
+      await messenger.messages.move([currentMessageId], entry.originalFolderId);
 
       // Remove the most recent training example matching this message
       await removeTrainingExampleBySubject(entry.subject);
@@ -1031,4 +1043,8 @@ messenger.storage.onChanged.addListener((changes, area) => {
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
-init().catch((e) => console.error("[MailReaper] Init failed:", e));
+init().catch(async (e) => {
+  console.error("[MailReaper] Init failed:", e);
+  lastScanError = `Initialization failed: ${e.message}`;
+  await persistScanState();
+});
