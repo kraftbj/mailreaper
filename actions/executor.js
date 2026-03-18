@@ -228,7 +228,13 @@ export async function cleanupGracePeriod() {
             }
           }
         }
-        const referenceDate = movedAt || new Date(msg.date).getTime();
+        // If no movedAt was stored (e.g., message lacks headerMessageId),
+        // skip permanent deletion rather than falling back to send date
+        // which could cause premature deletion of old messages.
+        if (!movedAt) {
+          continue;
+        }
+        const referenceDate = movedAt;
         const gracePeriodMs = gracePeriodDays * 24 * 60 * 60 * 1000;
 
         // If the grace period has elapsed since the message was moved, delete permanently
@@ -238,6 +244,10 @@ export async function cleanupGracePeriod() {
             const currentMsg = await messenger.messages.get(msg.id);
             if (!currentMsg || currentMsg.folder?.path !== expiredFolder.path) {
               console.warn(`[MailReaper] Message ${msg.id} no longer in Expired folder, skipping deletion`);
+              // Clean up orphaned storage entry
+              if (msg.headerMessageId) {
+                await messenger.storage.local.remove(`mailreaper_movedAt_${msg.headerMessageId}`);
+              }
               continue;
             }
 

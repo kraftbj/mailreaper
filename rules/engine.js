@@ -214,6 +214,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       if (messageIdHeader) {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
+          if (cached.error) return { llmError: true };
           if (cached.expired) {
             return { ...cached, rule };
           }
@@ -314,6 +315,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       if (messageIdHeader) {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
+          if (cached.error) return { llmError: true };
           if (cached.classified) return { ...cached, rule };
           return null;
         }
