@@ -33,7 +33,7 @@ export async function executeAction(message, verdict) {
         await tagAsExpired(message, verdict);
         break;
       default:
-        console.warn(`[MailReaper] Unknown action: ${rule.action}`);
+        throw new Error(`Unknown action "${rule.action}" on rule "${rule.name || rule.id}"`);
     }
   } catch (e) {
     console.error(`[MailReaper] Action failed for message ${message.id}:`, e);
@@ -95,6 +95,7 @@ async function moveToFolder(message, verdict, settings) {
     const folderName = verdict.classified
       ? (rule.classifyFolder || "Paper-Trail")
       : EXPIRED_FOLDER_NAME;
+    console.warn(`[MailReaper] Move failed, retrying with fresh folder lookup:`, moveErr.message);
     const cacheKey = `${message.folder.accountId}:${folderName}`;
     folderCache.delete(cacheKey);
     folderId = await getOrCreateNamedFolder(message.folder.accountId, folderName);
@@ -270,6 +271,11 @@ export async function cleanupGracePeriod() {
             });
           } catch (e) {
             console.error(`[MailReaper] Grace cleanup failed for ${msg.id}:`, e);
+            try {
+              await logActivity({ type: "error", messageId: msg.id, subject: msg.subject, action: "grace_delete", reason: `Grace cleanup failed: ${e.message}` });
+            } catch (logErr) {
+              console.error("[MailReaper] Failed to log cleanup error:", logErr);
+            }
           }
         }
       }

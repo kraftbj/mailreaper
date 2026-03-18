@@ -137,7 +137,7 @@ function renderActivity(entries) {
         if (result?.success) {
           await loadStatus();
         } else {
-          btn.textContent = "failed";
+          btn.textContent = result?.error || "failed";
         }
       } catch (e) {
         console.warn("Undo failed:", e);

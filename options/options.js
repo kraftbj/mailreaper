@@ -118,9 +118,15 @@ function renderRulesList() {
       const ruleId = e.target.dataset.ruleId;
       const rule = currentRules.find((r) => r.id === ruleId);
       if (rule) {
-        rule.enabled = e.target.checked;
-        await saveRule(rule);
-        await loadRules();
+        try {
+          rule.enabled = e.target.checked;
+          await saveRule(rule);
+          await loadRules();
+        } catch (err) {
+          console.error("[MailReaper] Failed to toggle rule:", err);
+          e.target.checked = !e.target.checked;
+          showSaveStatus("ruleSaveStatus", `Toggle failed: ${err.message}`);
+        }
       }
     });
   });

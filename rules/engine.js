@@ -239,7 +239,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       try {
         const bodyText = await lazyBody();
         if (bodyText === null) {
-          return { skippedTrace: "Skipped LLM: body text unavailable" };
+          return { llmError: true, skippedTrace: "Skipped LLM: body text unavailable" };
         }
         const snippet = settings.llmMetadataOnly
           ? null
@@ -325,7 +325,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           if (cached.classified) {
             const threshold = settings.llmConfidenceThreshold ?? 0.7;
             if ((cached.confidence ?? 0) < threshold) {
-              return null; // Below current threshold
+              return { skippedTrace: `Cached LLM-classify verdict below confidence threshold (${cached.confidence} < ${threshold})` };
             }
             return { ...cached, rule };
           }
@@ -336,7 +336,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       try {
         const bodyText = await lazyBody();
         if (bodyText === null) {
-          return { skippedTrace: "Skipped LLM: body text unavailable" };
+          return { llmError: true, skippedTrace: "Skipped LLM: body text unavailable" };
         }
         const snippet = settings.llmMetadataOnly
           ? null
