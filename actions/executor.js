@@ -281,8 +281,8 @@ export async function cleanupGracePeriod() {
 // ── Folder Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Find or create a named folder for an account.
- * Looks for a "Folders" or "Labels" parent first (Proton Mail), then falls back to root.
+ * Find or create a named folder. When creating, looks for a "Folders" or
+ * "Labels" parent first (Proton Mail), then falls back to root.
  */
 async function getOrCreateNamedFolder(accountId, folderName) {
   const cacheKey = `${accountId}:${folderName}`;

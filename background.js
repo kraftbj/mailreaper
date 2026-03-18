@@ -54,7 +54,7 @@ async function restoreScanState() {
 }
 
 // Tracks messages already evaluated with no match.
-// Keyed by message ID, value is { fingerprint, trace } where fingerprint is
+// Keyed by Thunderbird internal message.id (not headerMessageId), value is { fingerprint, trace } where fingerprint is
 // the rules fingerprint at evaluation time and trace lists rules checked.
 // When rules change, the cache is cleared so messages are re-evaluated.
 // In-memory only — resets on service worker restart, which is acceptable
@@ -162,7 +162,10 @@ messenger.menus.onClicked.addListener(async (info) => {
   // Get the message ID from the menu click
   // info.selectedMessages contains the messages when context is message_list
   const messages = info.selectedMessages?.messages;
-  if (!messages || messages.length === 0) return;
+  if (!messages || messages.length === 0) {
+    console.warn("[MailReaper] Context menu clicked but no messages selected");
+    return;
+  }
 
   // Act on each selected message
   for (const msg of messages) {

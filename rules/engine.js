@@ -372,7 +372,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
 
     default:
       console.warn(`[MailReaper] Unknown expiration type: ${rule.expiration.type}`);
-      return null;
+      return { skippedTrace: "Unknown expiration type: " + rule.expiration.type };
   }
 }
 

@@ -249,10 +249,11 @@ export async function clearActivityLog() {
 
 // ── LLM Cache ───────────────────────────────────────────────────────────────
 
-// Positive verdicts (expired or classified) are re-checked after 24h.
-// Future-expiration verdicts (not yet expired but has an expiresAt date) also
-// use the 24h TTL so they get re-evaluated before the expiry window passes.
-// "Not time-sensitive" verdicts are cached for 7 days.
+// Cache TTL tiers (checked in order):
+//   1. Errors (error field set)            → 10 minutes, allows prompt retry
+//   2. Expired or classified               → 24 hours, re-check in case of undo
+//   3. Future expiration (has expiresAt)    → 24 hours, re-evaluate before expiry
+//   4. Not time-sensitive (everything else) → 7 days, low churn
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
 const CACHE_TTL_NOT_SENSITIVE_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_TTL_ERROR_MS = 10 * 60 * 1000; // Retry errors after 10 minutes
