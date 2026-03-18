@@ -99,11 +99,11 @@ function renderRulesList() {
       if (rule.builtin) badges.push('<span class="rule-badge builtin">Built-in</span>');
 
       return `
-        <div class="rule-item ${rule.enabled ? "" : "disabled"}" data-id="${rule.id}">
+        <div class="rule-item ${rule.enabled ? "" : "disabled"}" data-id="${escapeAttr(rule.id)}">
           <span class="rule-drag">⠿</span>
           <input type="checkbox" class="rule-toggle" ${rule.enabled ? "checked" : ""}
-                 data-rule-id="${rule.id}" title="Enable/disable">
-          <div class="rule-info" data-edit-rule="${rule.id}">
+                 data-rule-id="${escapeAttr(rule.id)}" title="Enable/disable">
+          <div class="rule-info" data-edit-rule="${escapeAttr(rule.id)}">
             <div class="rule-name">${escapeHtml(rule.name)}</div>
             <div class="rule-meta">${typeLabel} · ${rule.action} · ${rule.gracePeriodDays}d grace ${badges.join(" ")}</div>
           </div>
@@ -344,10 +344,15 @@ document.getElementById("btnSaveLlm").addEventListener("click", async () => {
 
 document.getElementById("btnClearLlmCache").addEventListener("click", async () => {
   if (confirm("Clear all cached LLM verdicts? Next scan will re-evaluate all messages.")) {
-    const { clearLlmCache } = await import("../rules/storage.js");
-    await clearLlmCache();
     const btn = document.getElementById("btnClearLlmCache");
-    btn.textContent = "Cleared!";
+    try {
+      const { clearLlmCache } = await import("../rules/storage.js");
+      await clearLlmCache();
+      btn.textContent = "Cleared!";
+    } catch (e) {
+      console.error("Failed to clear LLM cache:", e);
+      btn.textContent = `Error: ${e.message}`;
+    }
     setTimeout(() => { btn.textContent = "Clear LLM Cache"; }, 2000);
   }
 });
@@ -411,12 +416,12 @@ async function loadFolders() {
   container.innerHTML = accounts
     .map(
       (account) => `
-    <div class="folder-account" data-account-id="${account.id}">
+    <div class="folder-account" data-account-id="${escapeAttr(account.id)}">
       <div class="folder-account-header">
-        <div class="folder-account-name">${escapeHtml(account.name)} (${account.type})</div>
+        <div class="folder-account-name">${escapeHtml(account.name)} (${escapeHtml(account.type)})</div>
         <div class="folder-account-actions">
-          <button class="btn-select-all" data-account-id="${account.id}">Select all</button>
-          <button class="btn-select-none" data-account-id="${account.id}">Select none</button>
+          <button class="btn-select-all" data-account-id="${escapeAttr(account.id)}">Select all</button>
+          <button class="btn-select-none" data-account-id="${escapeAttr(account.id)}">Select none</button>
         </div>
       </div>
       ${account.folders
@@ -428,8 +433,8 @@ async function loadFolders() {
           <div class="folder-item ${indent}">
             <label>
               <input type="checkbox" class="folder-checkbox"
-                     data-folder-id="${folder.id}"
-                     data-account-id="${account.id}"
+                     data-folder-id="${escapeAttr(folder.id)}"
+                     data-account-id="${escapeAttr(account.id)}"
                      ${selectedFolderIds.has(folder.id) ? "checked" : ""}>
               ${icon} ${escapeHtml(folder.name)}
             </label>
@@ -547,9 +552,17 @@ async function loadActivity() {
 
 document.getElementById("btnClearLog").addEventListener("click", async () => {
   if (confirm("Clear the activity log?")) {
-    const { clearActivityLog } = await import("../rules/storage.js");
-    await clearActivityLog();
-    await loadActivity();
+    const btn = document.getElementById("btnClearLog");
+    try {
+      const { clearActivityLog } = await import("../rules/storage.js");
+      await clearActivityLog();
+      btn.textContent = "Cleared!";
+      await loadActivity();
+    } catch (e) {
+      console.error("Failed to clear activity log:", e);
+      btn.textContent = `Error: ${e.message}`;
+    }
+    setTimeout(() => { btn.textContent = "Clear Activity Log"; }, 2000);
   }
 });
 
@@ -559,6 +572,10 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 function showSaveStatus(elementId, message = "✓ Saved") {
@@ -583,9 +600,11 @@ function formatTime(isoString) {
 // ── Initialize ──────────────────────────────────────────────────────────────
 
 async function init() {
-  await loadGeneral();
-  await loadRules();
-  await loadLlm();
+  const results = await Promise.allSettled([loadGeneral(), loadRules(), loadLlm()]);
+  const failures = results.filter(r => r.status === "rejected");
+  if (failures.length > 0) {
+    throw new Error(failures.map(f => f.reason?.message || "Unknown error").join("; "));
+  }
 }
 
 init().catch((e) => {

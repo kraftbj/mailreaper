@@ -115,7 +115,7 @@ function renderActivity(entries) {
     <div class="activity-item${entry.undone ? " activity-undone" : ""}">
       <span class="activity-icon">${ACTION_ICONS[entry.type] || "•"}</span>
       <span class="activity-text" title="${escapeHtml(entry.subject || "")}">${escapeHtml(truncate(entry.subject || "Unknown", 30))}</span>
-      ${entry.undoable ? `<button class="undo-btn" data-undo-id="${entry.id}">undo</button>` : ""}
+      ${entry.undoable ? `<button class="undo-btn" data-undo-id="${escapeAttr(entry.id)}">undo</button>` : ""}
       ${entry.undone ? `<span class="activity-time">undone</span>` : `<span class="activity-time">${formatRelativeTime(new Date(entry.timestamp))}</span>`}
     </div>
   `
@@ -172,6 +172,10 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function escapeAttr(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
 // ── Button Handlers ─────────────────────────────────────────────────────────
 
 document.getElementById("btnScan").addEventListener("click", async () => {
@@ -181,14 +185,17 @@ document.getElementById("btnScan").addEventListener("click", async () => {
 
   try {
     await messenger.runtime.sendMessage({ type: "triggerScan" });
-    // loadStatus polling will update the UI and re-enable when done
-    await loadStatus();
   } catch (e) {
     console.error("Scan trigger failed:", e);
   }
 
-  btn.disabled = false;
-  btn.textContent = "Scan Now";
+  // Keep button disabled briefly to prevent double-clicks; loadStatus
+  // polling will reflect scanInProgress and update the button accordingly
+  setTimeout(async () => {
+    await loadStatus();
+    btn.disabled = false;
+    btn.textContent = "Scan Now";
+  }, 3000);
 });
 
 document.getElementById("btnDiagnose").addEventListener("click", async () => {
