@@ -1,6 +1,6 @@
 /**
  * Storage layer for MailReaper rules and settings.
- * Uses browser.storage.local for persistence across sessions.
+ * Uses messenger.storage.local (Thunderbird's storage API) for persistence across sessions.
  */
 
 import { DEFAULT_RULES } from "./defaults.js";
@@ -250,6 +250,8 @@ export async function clearActivityLog() {
 // ── LLM Cache ───────────────────────────────────────────────────────────────
 
 // Positive verdicts (expired or classified) are re-checked after 24h.
+// Future-expiration verdicts (not yet expired but has an expiresAt date) also
+// use the 24h TTL so they get re-evaluated before the expiry window passes.
 // "Not time-sensitive" verdicts are cached for 7 days.
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
 const CACHE_TTL_NOT_SENSITIVE_MS = 7 * 24 * 60 * 60 * 1000;
