@@ -85,7 +85,8 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
 }
 
 /**
- * Check if a message matches a rule's criteria (sender, subject, folder).
+ * Check if a message matches a rule's static criteria (sender, subject, folder).
+ * Header-level matching (headerMatch) is deferred to evaluateExpiration().
  * Only uses data from the MessageHeader — no expensive API calls needed.
  */
 function matchesRule(message, rule) {
@@ -392,6 +393,7 @@ function getHeader(fullMessage, headerName) {
 
 /**
  * Simple glob matching: supports * (any chars) and ? (single char).
+ * Patterns are anchored — must match the entire string.
  * Not a full glob implementation, but sufficient for email patterns.
  */
 function globMatch(str, pattern) {
