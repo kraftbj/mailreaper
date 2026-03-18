@@ -221,10 +221,9 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           if (cached.expiresAt && now > new Date(cached.expiresAt)) {
             const threshold = settings.llmConfidenceThreshold ?? 0.7;
             if ((cached.confidence ?? 0) < threshold) {
-              trace.push(`Cached LLM verdict expired but below confidence threshold (${cached.confidence} < ${threshold})`);
-              return null;
+              return { skippedTrace: `Cached LLM verdict expired but below confidence threshold (${cached.confidence} < ${threshold})` };
             }
-            return { ...cached, expired: true, rule, reason: cached.reason || "Cached expiration date passed", trace };
+            return { ...cached, expired: true, rule, reason: cached.reason || "Cached expiration date passed" };
           }
           return null; // Cached as "not expired" (and still not expired)
         }
