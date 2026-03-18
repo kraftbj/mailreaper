@@ -31,7 +31,7 @@ Debug via Thunderbird's Add-on Developer Tools console (debug button next to the
 
 **Rule structure** (see `rules/defaults.js`): `match` object has `senderPatterns`, `subjectPatterns` (glob syntax), `folders`, `headerMatch`. `expiration` object specifies type and parameters.
 
-**LLM layer** (`llm/adapter.js`): Gemini and Ollama backends behind a unified interface. Both request JSON responses. `llm/prompts.js` has the prompt templates. LLM verdicts are cached in `browser.storage.local` with 24h TTL, max 5000 entries.
+**LLM layer** (`llm/adapter.js`): Gemini and Ollama backends behind a unified interface. Both request JSON responses. `llm/prompts.js` has the prompt templates. LLM verdicts are cached in `browser.storage.local` with tiered TTL (24h for positive verdicts, 7d for negative, 10m for errors), max 5000 entries.
 
 **Storage** (`rules/storage.js`): All state in `messenger.storage.local` under `mailreaper_*` keys. Settings merge with defaults on read so new settings are picked up on extension updates.
 
