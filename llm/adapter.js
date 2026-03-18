@@ -14,13 +14,13 @@ import { buildAnalysisPrompt, buildRuleGenerationPrompt, buildClassificationProm
  * @returns {Promise<object>} { isTimeSensitive, expiresAt, reason, confidence }
  */
 export async function analyzeMessageWithLlm(messageData, settings, examples) {
-  const prompt = buildAnalysisPrompt(messageData, examples);
+  const { systemPrompt, userContent } = buildAnalysisPrompt(messageData, examples);
 
   switch (settings.llmProvider) {
     case "gemini":
-      return callGemini(prompt, settings);
+      return callGemini(systemPrompt, userContent, settings);
     case "ollama":
-      return callOllama(prompt, settings);
+      return callOllama(systemPrompt, userContent, settings);
     default:
       throw new Error(`Unknown LLM provider: ${settings.llmProvider}`);
   }
@@ -35,13 +35,13 @@ export async function analyzeMessageWithLlm(messageData, settings, examples) {
  * @returns {Promise<object>} { matches, reason, confidence }
  */
 export async function classifyMessageWithLlm(messageData, settings, examples) {
-  const prompt = buildClassificationPrompt(messageData, examples);
+  const { systemPrompt, userContent } = buildClassificationPrompt(messageData, examples);
 
   switch (settings.llmProvider) {
     case "gemini":
-      return callGemini(prompt, settings);
+      return callGemini(systemPrompt, userContent, settings);
     case "ollama":
-      return callOllama(prompt, settings);
+      return callOllama(systemPrompt, userContent, settings);
     default:
       throw new Error(`Unknown LLM provider: ${settings.llmProvider}`);
   }
@@ -55,15 +55,15 @@ export async function classifyMessageWithLlm(messageData, settings, examples) {
  * @returns {Promise<object>} Proposed rule object
  */
 export async function generateRuleFromExamples(examples, settings) {
-  const prompt = buildRuleGenerationPrompt(examples);
+  const { systemPrompt, userContent } = buildRuleGenerationPrompt(examples);
 
   let result;
   switch (settings.llmProvider) {
     case "gemini":
-      result = await callGemini(prompt, settings);
+      result = await callGemini(systemPrompt, userContent, settings);
       break;
     case "ollama":
-      result = await callOllama(prompt, settings);
+      result = await callOllama(systemPrompt, userContent, settings);
       break;
     default:
       throw new Error(`LLM provider not configured`);
@@ -76,15 +76,16 @@ export async function generateRuleFromExamples(examples, settings) {
  * Test LLM connection with a simple prompt.
  */
 export async function testLlmConnection(settings) {
-  const testPrompt = 'Respond with exactly: {"status": "ok"}';
+  const systemPrompt = "You are a connection test. Respond with valid JSON.";
+  const userContent = 'Respond with exactly: {"status": "ok"}';
 
   try {
     switch (settings.llmProvider) {
       case "gemini":
-        await callGemini(testPrompt, settings);
+        await callGemini(systemPrompt, userContent, settings);
         return { success: true };
       case "ollama":
-        await callOllama(testPrompt, settings);
+        await callOllama(systemPrompt, userContent, settings);
         return { success: true };
       default:
         return { success: false, error: "No LLM provider selected" };
@@ -96,7 +97,7 @@ export async function testLlmConnection(settings) {
 
 // ── Gemini Backend ──────────────────────────────────────────────────────────
 
-async function callGemini(prompt, settings) {
+async function callGemini(systemPrompt, userContent, settings) {
   const { geminiApiKey, geminiModel } = settings;
 
   if (!geminiApiKey) {
@@ -117,11 +118,8 @@ async function callGemini(prompt, settings) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ parts: [{ text: userContent }] }],
         generationConfig: {
           temperature: 0.1,
           maxOutputTokens: 512,
@@ -159,14 +157,14 @@ async function callGemini(prompt, settings) {
 
 // ── Ollama Backend ──────────────────────────────────────────────────────────
 
-async function callOllama(prompt, settings) {
+async function callOllama(systemPrompt, userContent, settings) {
   const { ollamaEndpoint, ollamaModel } = settings;
 
   if (!ollamaEndpoint) {
     throw new Error("Ollama endpoint not configured");
   }
 
-  const endpoint = `${ollamaEndpoint}/api/generate`;
+  const endpoint = `${ollamaEndpoint}/api/chat`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -178,7 +176,10 @@ async function callOllama(prompt, settings) {
       signal: controller.signal,
       body: JSON.stringify({
         model: ollamaModel,
-        prompt: prompt,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
         stream: false,
         format: "json",
         options: {
@@ -194,10 +195,10 @@ async function callOllama(prompt, settings) {
     }
 
     const data = await response.json();
-    if (!data.response) {
+    if (!data.message?.content) {
       throw new Error("Empty response from Ollama");
     }
-    return parseJsonResponse(data.response);
+    return parseJsonResponse(data.message.content);
   } catch (e) {
     if (e.name === "AbortError") {
       throw new Error("LLM request timed out after 30 seconds");

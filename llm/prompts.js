@@ -4,6 +4,7 @@
 
 /**
  * Build the analysis prompt for determining if a message has expired.
+ * Returns { systemPrompt, userContent } for role separation.
  */
 export function buildAnalysisPrompt(messageData, examples) {
   const { sender, subject, sentDate, bodySnippet, customPrompt } = messageData;
@@ -34,15 +35,9 @@ export function buildAnalysisPrompt(messageData, examples) {
   const sentDateObj = new Date(sentDate);
   const sentDateReadable = sentDateObj.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-  return `Decide if this email has expired. Follow the steps below.
+  const systemPrompt = `Decide if this email has expired. Follow the steps below.
 
 TODAY is ${currentDateReadable} (${currentTime}).
-
-Email:
-- From: ${sender || "unknown"}
-- Subject: ${subject || "(no subject)"}
-- Sent: ${sentDateReadable} (${sentDate})
-${bodySection}
 ${examplesSection}
 STEP 1: Does the email contain a deadline, event date, or expiration?
 Look for: dates, times, "ends tonight", "ends at midnight", "today only", "last chance", "expires", "final hours", appointment times, event times, check-in times, verification codes.
@@ -72,10 +67,19 @@ Respond ONLY with JSON:
 }
 
 When in doubt, prefer false negatives.${customSection}`;
+
+  const userContent = `Email:
+- From: ${sender || "unknown"}
+- Subject: ${subject || "(no subject)"}
+- Sent: ${sentDateReadable} (${sentDate})
+${bodySection}`;
+
+  return { systemPrompt, userContent };
 }
 
 /**
  * Build the classification prompt for categorizing an email.
+ * Returns { systemPrompt, userContent } for role separation.
  */
 export function buildClassificationPrompt(messageData, examples) {
   const { sender, subject, sentDate, bodySnippet, category, customPrompt } = messageData;
@@ -104,13 +108,7 @@ export function buildClassificationPrompt(messageData, examples) {
     examplesSection = `\n\nThe user has confirmed these emails are ${category}s:\n${lines.join("\n")}\n\nUse these as reference when classifying the email below.`;
   }
 
-  return `You are an email classifier. Determine if this email is ${desc}.${examplesSection}
-
-Email metadata:
-- From: ${sender || "unknown"}
-- Subject: ${subject || "(no subject)"}
-- Sent: ${sentDate}
-${bodySection}
+  const systemPrompt = `You are an email classifier. Determine if this email is ${desc}.${examplesSection}
 
 Respond ONLY with a JSON object:
 {
@@ -129,10 +127,19 @@ Guidelines:
 - Marketing emails from stores → does NOT match
 - Account alerts, password resets → does NOT match
 - Prefer false negatives over false positives — when in doubt, say false.${customSection}`;
+
+  const userContent = `Email metadata:
+- From: ${sender || "unknown"}
+- Subject: ${subject || "(no subject)"}
+- Sent: ${sentDate}
+${bodySection}`;
+
+  return { systemPrompt, userContent };
 }
 
 /**
  * Build a prompt for generating a rule from example emails.
+ * Returns { systemPrompt, userContent } for role separation.
  */
 export function buildRuleGenerationPrompt(examples) {
   const exampleList = examples
@@ -145,9 +152,7 @@ export function buildRuleGenerationPrompt(examples) {
     )
     .join("\n\n");
 
-  return `You are a rule-generation assistant for an email expiration manager. Given example emails that a user considers "expirable" (time-sensitive emails that should be cleaned up after they expire), propose an expiration rule.
-
-${exampleList}
+  const systemPrompt = `You are a rule-generation assistant for an email expiration manager. Given example emails that a user considers "expirable" (time-sensitive emails that should be cleaned up after they expire), propose an expiration rule.
 
 Analyze the examples and respond ONLY with a JSON object:
 {
@@ -167,4 +172,8 @@ Guidelines:
 - Use * for wildcards in patterns.
 - If the examples are from the same sender, prioritize senderPatterns. If they share subject keywords, prioritize subjectPatterns.
 - TTL should reflect how long the content is useful (transit alerts: 2-3h, sales: until deadline, delivery notices: 24-72h).`;
+
+  const userContent = exampleList;
+
+  return { systemPrompt, userContent };
 }
