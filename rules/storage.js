@@ -269,6 +269,9 @@ export async function getCachedVerdict(messageIdHeader) {
     ttl = CACHE_TTL_ERROR_MS;
   } else if (entry.verdict?.expired || entry.verdict?.classified) {
     ttl = CACHE_TTL_EXPIRED_MS;
+  } else if (entry.verdict?.expiresAt && new Date(entry.verdict.expiresAt) > new Date()) {
+    // Future expiration — use short TTL so it gets re-evaluated before expiry
+    ttl = CACHE_TTL_EXPIRED_MS;
   } else {
     ttl = CACHE_TTL_NOT_SENSITIVE_MS;
   }

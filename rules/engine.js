@@ -65,6 +65,11 @@ export async function evaluateMessage(message, getFullMessage, getBodyText) {
       settings
     );
 
+    if (verdict && verdict.skippedTrace) {
+      trace.push(verdict.skippedTrace);
+      continue;
+    }
+
     if (verdict && verdict.llmError) {
       hasLlmError = true;
       continue;
@@ -220,6 +225,9 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       // Call LLM
       try {
         const bodyText = await lazyBody();
+        if (bodyText === null) {
+          return { skippedTrace: "Skipped LLM: body text unavailable" };
+        }
         const snippet = settings.llmMetadataOnly
           ? null
           : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
@@ -253,7 +261,11 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
           if (isNaN(expiresAt.getTime())) {
             console.warn(`[MailReaper] LLM returned unparseable expiresAt: "${llmResult.expiresAt}" for "${message.subject}"`);
           } else if (llmResult.confidence < settings.llmConfidenceThreshold) {
-            console.log(`[MailReaper] LLM confidence ${llmResult.confidence} below threshold ${settings.llmConfidenceThreshold} for "${message.subject}"`);
+            const detail = llmResult.confidence === 0.5
+              ? `LLM verdict below confidence threshold (0.5 imputed, needs ${settings.llmConfidenceThreshold})`
+              : `LLM verdict below confidence threshold (${llmResult.confidence}, needs ${settings.llmConfidenceThreshold})`;
+            console.log(`[MailReaper] ${detail} for "${message.subject}"`);
+            return { skippedTrace: detail };
           } else if (now > expiresAt) {
             return {
               expired: true,
@@ -302,6 +314,9 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
 
       try {
         const bodyText = await lazyBody();
+        if (bodyText === null) {
+          return { skippedTrace: "Skipped LLM: body text unavailable" };
+        }
         const snippet = settings.llmMetadataOnly
           ? null
           : (bodyText || "").substring(0, settings.llmMaxSnippetLength);
