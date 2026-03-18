@@ -135,8 +135,9 @@ function renderActivity(entries) {
         } else {
           btn.textContent = "failed";
         }
-      } catch {
-        btn.textContent = "failed";
+      } catch (e) {
+        console.warn("Undo failed:", e);
+        btn.textContent = `failed: ${e.message || "unknown error"}`;
       }
     });
   });
@@ -232,8 +233,8 @@ async function loadSelectedMessage() {
         const displayed = await messenger.messageDisplay.getDisplayedMessage(tabs[0].id);
         if (displayed) msg = displayed;
       }
-    } catch {
-      // Not a message display tab — fall through
+    } catch (e) {
+      console.warn("Could not get displayed message:", e);
     }
 
     if (!msg) {
@@ -263,14 +264,15 @@ async function loadSelectedMessage() {
           ).join("");
           infoEl.style.display = "block";
         }
-      } catch {
-        // Info lookup failed — not critical, just skip
+      } catch (e) {
+        console.warn("Message info lookup failed:", e);
       }
     } else {
       selectedMessageId = null;
       section.style.display = "none";
     }
-  } catch {
+  } catch (e) {
+    console.error("Failed to load selected message:", e);
     selectedMessageId = null;
     section.style.display = "none";
   }

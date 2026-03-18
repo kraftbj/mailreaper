@@ -38,19 +38,24 @@ async function loadGeneral() {
 }
 
 document.getElementById("btnSaveGeneral").addEventListener("click", async () => {
-  await messenger.runtime.sendMessage({
-    type: "updateSettings",
-    settings: {
-      scanEnabled: document.getElementById("scanEnabled").checked,
-      scanIntervalMinutes: parseInt(document.getElementById("scanInterval").value),
-      minMessageAgeMinutes: parseInt(document.getElementById("minAge").value),
-      maxMessagesPerScan: parseInt(document.getElementById("maxPerScan").value),
-      defaultGracePeriodDays: parseInt(document.getElementById("gracePeriod").value),
-      gracePeriodCleanupEnabled: document.getElementById("graceCleanup").checked,
-      notifyOnExpiration: document.getElementById("notifyExpiration").checked,
-    },
-  });
-  showSaveStatus("saveStatus");
+  try {
+    await messenger.runtime.sendMessage({
+      type: "updateSettings",
+      settings: {
+        scanEnabled: document.getElementById("scanEnabled").checked,
+        scanIntervalMinutes: parseInt(document.getElementById("scanInterval").value),
+        minMessageAgeMinutes: parseInt(document.getElementById("minAge").value),
+        maxMessagesPerScan: parseInt(document.getElementById("maxPerScan").value),
+        defaultGracePeriodDays: parseInt(document.getElementById("gracePeriod").value),
+        gracePeriodCleanupEnabled: document.getElementById("graceCleanup").checked,
+        notifyOnExpiration: document.getElementById("notifyExpiration").checked,
+      },
+    });
+    showSaveStatus("saveStatus");
+  } catch (e) {
+    console.error("Failed to save general settings:", e);
+    showSaveStatus("saveStatus", "Save failed");
+  }
 });
 
 // ── Rules Tab ───────────────────────────────────────────────────────────────
@@ -287,20 +292,25 @@ document.getElementById("llmConfidence").addEventListener("input", (e) => {
 });
 
 document.getElementById("btnSaveLlm").addEventListener("click", async () => {
-  await messenger.runtime.sendMessage({
-    type: "updateSettings",
-    settings: {
-      llmProvider: document.getElementById("llmProvider").value,
-      geminiApiKey: document.getElementById("geminiApiKey").value,
-      geminiModel: document.getElementById("geminiModel").value,
-      ollamaEndpoint: document.getElementById("ollamaEndpoint").value,
-      ollamaModel: document.getElementById("ollamaModel").value,
-      llmMetadataOnly: document.getElementById("llmMetadataOnly").checked,
-      llmMaxSnippetLength: parseInt(document.getElementById("llmMaxSnippet").value),
-      llmConfidenceThreshold: parseFloat(document.getElementById("llmConfidence").value),
-    },
-  });
-  showSaveStatus("llmSaveStatus");
+  try {
+    await messenger.runtime.sendMessage({
+      type: "updateSettings",
+      settings: {
+        llmProvider: document.getElementById("llmProvider").value,
+        geminiApiKey: document.getElementById("geminiApiKey").value,
+        geminiModel: document.getElementById("geminiModel").value,
+        ollamaEndpoint: document.getElementById("ollamaEndpoint").value,
+        ollamaModel: document.getElementById("ollamaModel").value,
+        llmMetadataOnly: document.getElementById("llmMetadataOnly").checked,
+        llmMaxSnippetLength: parseInt(document.getElementById("llmMaxSnippet").value),
+        llmConfidenceThreshold: parseFloat(document.getElementById("llmConfidence").value),
+      },
+    });
+    showSaveStatus("llmSaveStatus");
+  } catch (e) {
+    console.error("Failed to save LLM settings:", e);
+    showSaveStatus("llmSaveStatus", "Save failed");
+  }
 });
 
 document.getElementById("btnClearLlmCache").addEventListener("click", async () => {
@@ -318,25 +328,32 @@ document.getElementById("btnTestLlm").addEventListener("click", async () => {
   btn.disabled = true;
   btn.textContent = "Testing...";
 
-  const testSettings = {
-    llmProvider: document.getElementById("llmProvider").value,
-    geminiApiKey: document.getElementById("geminiApiKey").value,
-    geminiModel: document.getElementById("geminiModel").value,
-    ollamaEndpoint: document.getElementById("ollamaEndpoint").value,
-    ollamaModel: document.getElementById("ollamaModel").value,
-  };
+  try {
+    const testSettings = {
+      llmProvider: document.getElementById("llmProvider").value,
+      geminiApiKey: document.getElementById("geminiApiKey").value,
+      geminiModel: document.getElementById("geminiModel").value,
+      ollamaEndpoint: document.getElementById("ollamaEndpoint").value,
+      ollamaModel: document.getElementById("ollamaModel").value,
+    };
 
-  const result = await messenger.runtime.sendMessage({
-    type: "testLlmConnection",
-    settings: testSettings,
-  });
+    const result = await messenger.runtime.sendMessage({
+      type: "testLlmConnection",
+      settings: testSettings,
+    });
 
-  btn.disabled = false;
-  if (result.success) {
-    btn.textContent = "✓ Connected!";
-    btn.style.color = "var(--accent-green)";
-  } else {
-    btn.textContent = `✗ Failed: ${result.error}`;
+    btn.disabled = false;
+    if (result.success) {
+      btn.textContent = "✓ Connected!";
+      btn.style.color = "var(--accent-green)";
+    } else {
+      btn.textContent = `✗ Failed: ${result.error}`;
+      btn.style.color = "var(--danger)";
+    }
+  } catch (e) {
+    console.error("LLM connection test failed:", e);
+    btn.disabled = false;
+    btn.textContent = `✗ Error: ${e.message || "unknown"}`;
     btn.style.color = "var(--danger)";
   }
 
@@ -448,13 +465,18 @@ function folderIcon(type) {
 }
 
 document.getElementById("btnSaveFolders").addEventListener("click", async () => {
-  await messenger.runtime.sendMessage({
-    type: "updateSettings",
-    settings: {
-      scannedFolderIds: [...selectedFolderIds],
-    },
-  });
-  showSaveStatus("folderSaveStatus");
+  try {
+    await messenger.runtime.sendMessage({
+      type: "updateSettings",
+      settings: {
+        scannedFolderIds: [...selectedFolderIds],
+      },
+    });
+    showSaveStatus("folderSaveStatus");
+  } catch (e) {
+    console.error("Failed to save folder settings:", e);
+    showSaveStatus("folderSaveStatus", "Save failed");
+  }
 });
 
 // ── Activity Tab ────────────────────────────────────────────────────────────
@@ -512,9 +534,9 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function showSaveStatus(elementId) {
+function showSaveStatus(elementId, message = "✓ Saved") {
   const el = document.getElementById(elementId);
-  el.textContent = "✓ Saved";
+  el.textContent = message;
   setTimeout(() => { el.textContent = ""; }, 2000);
 }
 
