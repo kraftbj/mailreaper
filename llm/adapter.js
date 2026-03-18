@@ -101,38 +101,49 @@ async function callGemini(prompt, settings) {
     throw new Error("Gemini API key not configured");
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 512,
-        responseMimeType: "application/json",
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": geminiApiKey,
       },
-    }),
-  });
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 512,
+          responseMimeType: "application/json",
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errBody}`);
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(`Gemini API error (${response.status}): ${errBody}`);
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error("Empty response from Gemini");
+    }
+
+    return parseJsonResponse(text);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!text) {
-    throw new Error("Empty response from Gemini");
-  }
-
-  return parseJsonResponse(text);
 }
 
 // ── Ollama Backend ──────────────────────────────────────────────────────────
