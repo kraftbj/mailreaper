@@ -4,7 +4,7 @@ VERSION = $(shell grep '"version"' manifest.json | head -1 | sed 's/.*: *"//;s/"
 SOURCES = manifest.json background.js \
 	$(shell find _locales actions icons llm options popup rules -type f)
 
-EXCLUDE = --exclude '.*' --exclude '*/.DS_Store' --exclude 'Makefile' --exclude 'CLAUDE.md' --exclude 'README.md' --exclude '*.xpi'
+EXCLUDE = --exclude '.*' --exclude '*/.DS_Store' --exclude 'Makefile' --exclude 'CLAUDE.md' --exclude 'README.md' --exclude 'REVIEW_NOTES.md' --exclude '*.xpi'
 
 .PHONY: all clean
 
