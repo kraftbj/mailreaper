@@ -816,53 +816,55 @@ async function patchLastActivity(messageId, patch) {
 
 async function handleUndoManualAction(logId) {
   try {
-    const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
-      await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-    if (!log) {
-      return { success: false, error: "Activity entry not found" };
-    }
-
-    const entry = log.find((e) => e.id === logId);
-    if (!entry) {
-      return { success: false, error: "Activity entry not found" };
-    }
-    if (!entry.undoable) {
-      return { success: false, error: "This action cannot be undone" };
-    }
-
-    if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
-      // Look up the message's current ID — Thunderbird changes IDs after moves,
-      // so entry.messageId is stale. Query by headerMessageId instead.
-      let currentMessageId = entry.messageId;
-      if (entry.headerMessageId) {
-        const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
-        if (results.messages && results.messages.length > 0) {
-          currentMessageId = results.messages[0].id;
-        }
+    return await withLock(STORAGE_KEYS.ACTIVITY_LOG, async () => {
+      const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+        await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+      if (!log) {
+        return { success: false, error: "Activity entry not found" };
       }
 
-      // Move message back to original folder
-      await messenger.messages.move([currentMessageId], entry.originalFolderId);
+      const entry = log.find((e) => e.id === logId);
+      if (!entry) {
+        return { success: false, error: "Activity entry not found" };
+      }
+      if (!entry.undoable) {
+        return { success: false, error: "This action cannot be undone" };
+      }
 
-      // Remove the most recent training example matching this message
-      await removeTrainingExampleBySubject(entry.subject);
+      if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
+        // Look up the message's current ID — Thunderbird changes IDs after moves,
+        // so entry.messageId is stale. Query by headerMessageId instead.
+        let currentMessageId = entry.messageId;
+        if (entry.headerMessageId) {
+          const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
+          if (results.messages && results.messages.length > 0) {
+            currentMessageId = results.messages[0].id;
+          }
+        }
 
-      console.log(`[MailReaper] Undid ${entry.undoType} action for "${entry.subject}"`);
-    } else if (entry.undoType === "manual_expiry" && entry.headerMessageId) {
-      // Remove the manual override
-      await removeManualOverride(entry.headerMessageId);
+        // Move message back to original folder
+        await messenger.messages.move([currentMessageId], entry.originalFolderId);
 
-      console.log(`[MailReaper] Undid manual expiry for "${entry.subject}"`);
-    } else {
-      return { success: false, error: "Unknown undo type" };
-    }
+        // Remove the most recent training example matching this message
+        await removeTrainingExampleBySubject(entry.subject);
 
-    // Mark entry as undone (not undoable anymore)
-    entry.undoable = false;
-    entry.undone = true;
-    await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+        console.log(`[MailReaper] Undid ${entry.undoType} action for "${entry.subject}"`);
+      } else if (entry.undoType === "manual_expiry" && entry.headerMessageId) {
+        // Remove the manual override
+        await removeManualOverride(entry.headerMessageId);
 
-    return { success: true };
+        console.log(`[MailReaper] Undid manual expiry for "${entry.subject}"`);
+      } else {
+        return { success: false, error: "Unknown undo type" };
+      }
+
+      // Mark entry as undone (not undoable anymore)
+      entry.undoable = false;
+      entry.undone = true;
+      await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+
+      return { success: true };
+    });
   } catch (e) {
     console.error("[MailReaper] Undo failed:", e);
     return { success: false, error: e.message };

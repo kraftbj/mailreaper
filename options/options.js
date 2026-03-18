@@ -221,6 +221,16 @@ document.getElementById("btnSaveRule").addEventListener("click", async () => {
   if (expType === "llm" || expType === "llm-classify") expiration.prompt = document.getElementById("ruleLlmPrompt").value || undefined;
   if (expType === "llm-classify") expiration.category = document.getElementById("ruleClassifyCategory").value;
 
+  // Validate regex before saving
+  if (expType === "content-regex" && expiration.pattern) {
+    try {
+      new RegExp(expiration.pattern, "i");
+    } catch (e) {
+      showSaveStatus("ruleSaveStatus", `Invalid regex: ${e.message}`);
+      return;
+    }
+  }
+
   const classifyFolder = (expType === "classify" || expType === "llm-classify")
     ? (document.getElementById("ruleClassifyFolder").value || "Paper-Trail")
     : undefined;

@@ -181,7 +181,9 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
 
       try {
         const regex = new RegExp(rule.expiration.pattern, "i");
-        const match = bodyText.match(regex);
+        // Truncate body to limit ReDoS exposure
+        const truncatedBody = bodyText.length > 50000 ? bodyText.substring(0, 50000) : bodyText;
+        const match = truncatedBody.match(regex);
         if (match && match[1]) {
           const expiresAt = new Date(match[1]);
           if (!isNaN(expiresAt.getTime()) && now > expiresAt) {
@@ -196,6 +198,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         }
       } catch (e) {
         console.warn(`[MailReaper] Regex error in rule ${rule.id}:`, e);
+        return { skippedTrace: "Regex error: " + e.message };
       }
       return null;
     }
