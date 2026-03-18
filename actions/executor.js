@@ -73,10 +73,13 @@ async function moveToFolder(message, verdict, settings) {
 
   await messenger.messages.move([message.id], folderId);
 
-  // Store the move timestamp for grace period calculation
+  // Store move timestamp and per-rule grace period for cleanup
   if (!verdict.classified && message.headerMessageId) {
     const storageKey = `mailreaper_movedAt_${message.headerMessageId}`;
-    await messenger.storage.local.set({ [storageKey]: Date.now() });
+    const gracePeriodDays = rule.gracePeriodDays ?? settings.defaultGracePeriodDays;
+    await messenger.storage.local.set({
+      [storageKey]: { movedAt: Date.now(), gracePeriodDays },
+    });
   }
 
   const activityType = verdict.classified ? "classified" : "moved";
@@ -186,18 +189,28 @@ export async function cleanupGracePeriod() {
       }
 
       const now = Date.now();
-      const gracePeriodMs = settings.defaultGracePeriodDays * 24 * 60 * 60 * 1000;
 
       for (const msg of messages) {
-        // Look up when this message was moved to Expired.
-        // Falls back to the message send date for messages moved before this tracking was added.
+        // Look up when this message was moved to Expired and the per-rule grace period.
+        // Stored value is either a plain timestamp (legacy) or { movedAt, gracePeriodDays }.
+        // Falls back to the message send date for messages moved before tracking was added.
         let movedAt;
+        let gracePeriodDays = settings.defaultGracePeriodDays;
         if (msg.headerMessageId) {
           const storageKey = `mailreaper_movedAt_${msg.headerMessageId}`;
           const stored = await messenger.storage.local.get(storageKey);
-          movedAt = stored[storageKey];
+          const value = stored[storageKey];
+          if (value != null) {
+            if (typeof value === "object" && value.movedAt) {
+              movedAt = value.movedAt;
+              gracePeriodDays = value.gracePeriodDays ?? settings.defaultGracePeriodDays;
+            } else {
+              movedAt = value;
+            }
+          }
         }
         const referenceDate = movedAt || new Date(msg.date).getTime();
+        const gracePeriodMs = gracePeriodDays * 24 * 60 * 60 * 1000;
 
         // If the grace period has elapsed since the message was moved, delete permanently
         if (now - referenceDate > gracePeriodMs) {
@@ -217,7 +230,7 @@ export async function cleanupGracePeriod() {
               subject: msg.subject,
               sender: msg.author,
               rule: "Grace period cleanup",
-              reason: `Exceeded ${settings.defaultGracePeriodDays}-day grace period`,
+              reason: `Exceeded ${gracePeriodDays}-day grace period`,
             });
           } catch (e) {
             console.error(`[MailReaper] Grace cleanup failed for ${msg.id}:`, e);
