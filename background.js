@@ -288,6 +288,7 @@ async function runScan() {
                 await removeManualOverride(message.headerMessageId);
                 expired++;
               }
+              processed++;
               continue;
             }
 

@@ -332,7 +332,7 @@ document.getElementById("btnSaveLlm").addEventListener("click", async () => {
         ollamaModel: document.getElementById("ollamaModel").value,
         llmMetadataOnly: document.getElementById("llmMetadataOnly").checked,
         llmMaxSnippetLength: parseIntSafe(document.getElementById("llmMaxSnippet").value, 2000),
-        llmConfidenceThreshold: parseFloatSafe(document.getElementById("llmConfidence").value, 0.7),
+        llmConfidenceThreshold: Math.max(0.5, parseFloatSafe(document.getElementById("llmConfidence").value, 0.7)),
       },
     });
     showSaveStatus("llmSaveStatus");
