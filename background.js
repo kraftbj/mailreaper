@@ -13,7 +13,7 @@ import {
   initializeStorage, getSettings, getRules, getActivityLog, logActivity, updateSettings,
   getManualOverrides, setManualOverride, removeManualOverride,
   addTrainingExample, getTrainingExamples, removeTrainingExampleBySubject, saveRule,
-  getCachedVerdict, removeCachedVerdict, STORAGE_KEYS,
+  getCachedVerdict, removeCachedVerdict, STORAGE_KEYS, withLock,
 } from "./rules/storage.js";
 import { evaluateMessage } from "./rules/engine.js";
 import { executeAction, cleanupGracePeriod } from "./actions/executor.js";
@@ -424,73 +424,78 @@ async function getCandidateMessages(folder, cutoffDate, settings) {
 // ── Message Handler for Runtime Communication ───────────────────────────────
 
 messenger.runtime.onMessage.addListener(async (message, sender) => {
-  switch (message.type) {
-    case "getStatus":
-      return {
-        scanInProgress,
-        lastScanTime,
-        lastScanResults,
-        lastScanError,
-        scanEnabled: (await getSettings()).scanEnabled,
-      };
+  try {
+    switch (message.type) {
+      case "getStatus":
+        return {
+          scanInProgress,
+          lastScanTime,
+          lastScanResults,
+          lastScanError,
+          scanEnabled: (await getSettings()).scanEnabled,
+        };
 
-    case "triggerScan":
-      // Don't await — let it run in background
-      runScan();
-      return { started: true };
+      case "triggerScan":
+        // Don't await — let it run in background
+        runScan().catch((e) => console.error("[MailReaper] Unhandled scan error:", e));
+        return { started: true };
 
-    case "getSettings":
-      return getSettings();
+      case "getSettings":
+        return getSettings();
 
-    case "updateSettings": {
-      const updated = await updateSettings(message.settings);
-      // Restart alarm if interval changed
-      if (message.settings.scanIntervalMinutes || message.settings.scanEnabled !== undefined) {
-        if (updated.scanEnabled) {
-          await setupAlarm(updated.scanIntervalMinutes);
-        } else {
-          await messenger.alarms.clear(ALARM_NAME);
+      case "updateSettings": {
+        const updated = await updateSettings(message.settings);
+        // Restart alarm if interval changed
+        if (message.settings.scanIntervalMinutes || message.settings.scanEnabled !== undefined) {
+          if (updated.scanEnabled) {
+            await setupAlarm(updated.scanIntervalMinutes);
+          } else {
+            await messenger.alarms.clear(ALARM_NAME);
+          }
         }
+        return updated;
       }
-      return updated;
+
+      case "getRules":
+        return getRules();
+
+      case "getActivityLog":
+        return getActivityLog(message.limit || 50);
+
+      case "testLlmConnection":
+        return testLlmConnection(message.settings);
+
+      case "generateRule":
+        return generateRuleFromExamples(message.examples, await getSettings());
+
+      case "getAccounts":
+        return getAccountsAndFolders();
+
+      case "runDiagnostic":
+        return runDiagnostic();
+
+      case "markAsReceipt":
+        return handleMarkAsReceipt(message.messageId);
+
+      case "markAsExpired":
+        return handleMarkAsExpired(message.messageId);
+
+      case "setManualExpiry":
+        return handleSetManualExpiry(message.messageId, message.hours);
+
+      case "undoManualAction":
+        return handleUndoManualAction(message.logIndex);
+
+      case "getMessageInfo":
+        return getMessageInfo(message.messageId);
+
+      default:
+        console.warn("[MailReaper] Unknown message type:", message.type);
+        return null;
     }
-
-    case "getRules":
-      return getRules();
-
-    case "getActivityLog":
-      return getActivityLog(message.limit || 50);
-
-    case "testLlmConnection":
-      return testLlmConnection(message.settings);
-
-    case "generateRule":
-      return generateRuleFromExamples(message.examples, await getSettings());
-
-    case "getAccounts":
-      return getAccountsAndFolders();
-
-    case "runDiagnostic":
-      return runDiagnostic();
-
-    case "markAsReceipt":
-      return handleMarkAsReceipt(message.messageId);
-
-    case "markAsExpired":
-      return handleMarkAsExpired(message.messageId);
-
-    case "setManualExpiry":
-      return handleSetManualExpiry(message.messageId, message.hours);
-
-    case "undoManualAction":
-      return handleUndoManualAction(message.logIndex);
-
-    case "getMessageInfo":
-      return getMessageInfo(message.messageId);
-
-    default:
-      console.warn("[MailReaper] Unknown message type:", message.type);
-      return null;
+  } catch (e) {
+    console.error("[MailReaper] onMessage handler error:", e);
+    return { error: e.message };
   }
 });
 
@@ -773,35 +778,37 @@ async function handleSetManualExpiry(messageId, hours) {
  */
 async function patchLastActivity(messageId, patch) {
   try {
-    const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
-      await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-    if (!log) return;
+    await withLock(STORAGE_KEYS.ACTIVITY_LOG, async () => {
+      const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+        await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+      if (!log) return;
 
-    const entry = log.find((e) => e.messageId === messageId);
-    if (entry) {
-      Object.assign(entry, patch);
-      await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
-    } else {
-      console.warn(`[MailReaper] patchLastActivity: no log entry found for message ${messageId}`);
-    }
+      const entry = log.find((e) => e.messageId === messageId);
+      if (entry) {
+        Object.assign(entry, patch);
+        await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+      } else {
+        console.warn(`[MailReaper] patchLastActivity: no log entry found for message ${messageId}`);
+      }
+    });
   } catch (e) {
     console.error("[MailReaper] patchLastActivity failed:", e);
   }
 }
 
 async function handleUndoManualAction(logIndex) {
-  const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
-    await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-  if (!log || !log[logIndex]) {
-    return { success: false, error: "Activity entry not found" };
-  }
-
-  const entry = log[logIndex];
-  if (!entry.undoable) {
-    return { success: false, error: "This action cannot be undone" };
-  }
-
   try {
+    const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+      await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+    if (!log || !log[logIndex]) {
+      return { success: false, error: "Activity entry not found" };
+    }
+
+    const entry = log[logIndex];
+    if (!entry.undoable) {
+      return { success: false, error: "This action cannot be undone" };
+    }
+
     if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
       // Look up the message's current ID — Thunderbird changes IDs after moves,
       // so entry.messageId is stale. Query by headerMessageId instead.
