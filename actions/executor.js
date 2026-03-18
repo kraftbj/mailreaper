@@ -73,15 +73,32 @@ async function moveToFolder(message, verdict, settings) {
     folderId = destinationId || await getOrCreateNamedFolder(message.folder.accountId, EXPIRED_FOLDER_NAME);
   }
 
-  await messenger.messages.move([message.id], folderId);
-
-  // Store move timestamp and per-rule grace period for cleanup
+  // Store move timestamp BEFORE the move so grace period cleanup never
+  // falls back to the send date if the storage write were to fail after a
+  // successful move. A stale movedAt entry is harmless if the move fails.
   if (!verdict.classified && message.headerMessageId) {
     const storageKey = `mailreaper_movedAt_${message.headerMessageId}`;
     const gracePeriodDays = rule.gracePeriodDays ?? settings.defaultGracePeriodDays;
     await messenger.storage.local.set({
       [storageKey]: { movedAt: Date.now(), gracePeriodDays },
     });
+  }
+
+  try {
+    await messenger.messages.move([message.id], folderId);
+  } catch (moveErr) {
+    // Folder may have been deleted externally — clear cache and retry once.
+    // Only retry when the folderId came from getOrCreateNamedFolder (cached).
+    if (rule.destination || (!verdict.classified && settings.expiredFolderId)) {
+      throw moveErr; // folderId wasn't from cache, nothing to retry
+    }
+    const folderName = verdict.classified
+      ? (rule.classifyFolder || "Paper-Trail")
+      : EXPIRED_FOLDER_NAME;
+    const cacheKey = `${message.folder.accountId}:${folderName}`;
+    folderCache.delete(cacheKey);
+    folderId = await getOrCreateNamedFolder(message.folder.accountId, folderName);
+    await messenger.messages.move([message.id], folderId);
   }
 
   const activityType = verdict.classified ? "classified" : "moved";

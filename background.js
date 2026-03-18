@@ -834,6 +834,9 @@ async function handleUndoManualAction(logId) {
       if ((entry.undoType === "classified" || entry.undoType === "expired") && entry.originalFolderId) {
         // Look up the message's current ID — Thunderbird changes IDs after moves,
         // so entry.messageId is stale. Query by headerMessageId instead.
+        if (!entry.headerMessageId) {
+          return { success: false, error: "Cannot undo: message lacks a Message-ID header" };
+        }
         let currentMessageId = entry.messageId;
         if (entry.headerMessageId) {
           const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
