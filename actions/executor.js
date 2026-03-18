@@ -46,6 +46,7 @@ export async function executeAction(message, verdict) {
       action: rule.action,
       error: e.message,
     });
+    throw e;
   }
 }
 
@@ -71,6 +72,12 @@ async function moveToFolder(message, verdict, settings) {
   }
 
   await messenger.messages.move([message.id], folderId);
+
+  // Store the move timestamp for grace period calculation
+  if (!verdict.classified && message.headerMessageId) {
+    const storageKey = `mailreaper_movedAt_${message.headerMessageId}`;
+    await messenger.storage.local.set({ [storageKey]: Date.now() });
+  }
 
   const activityType = verdict.classified ? "classified" : "moved";
   await logActivity({
@@ -156,59 +163,74 @@ async function tagAsExpired(message, verdict) {
  * that have been there longer than the grace period.
  */
 export async function cleanupGracePeriod() {
-  const settings = await getSettings();
-  if (!settings.gracePeriodCleanupEnabled) return;
+  try {
+    const settings = await getSettings();
+    if (!settings.gracePeriodCleanupEnabled) return;
 
-  const accounts = await messenger.accounts.list();
-  let cleanedCount = 0;
+    const accounts = await messenger.accounts.list();
+    let cleanedCount = 0;
 
-  for (const account of accounts) {
-    const expiredFolder = await findNamedFolder(account.id, EXPIRED_FOLDER_NAME);
-    if (!expiredFolder) continue;
+    for (const account of accounts) {
+      const expiredFolder = await findNamedFolder(account.id, EXPIRED_FOLDER_NAME);
+      if (!expiredFolder) continue;
 
-    // Get all messages in the Expired folder
-    const messageList = await messenger.messages.list(expiredFolder.id);
-    let messages = messageList.messages;
+      // Get all messages in the Expired folder
+      const messageList = await messenger.messages.list(expiredFolder.id);
+      let messages = messageList.messages;
 
-    // Also get continuation pages
-    let page = messageList;
-    while (page.id) {
-      page = await messenger.messages.continueList(page.id);
-      messages = messages.concat(page.messages);
-    }
+      // Also get continuation pages
+      let page = messageList;
+      while (page.id) {
+        page = await messenger.messages.continueList(page.id);
+        messages = messages.concat(page.messages);
+      }
 
-    const now = Date.now();
-
-    for (const msg of messages) {
-      // Check the activity log for when this message was moved
-      // Alternatively, use the message's date in the Expired folder
-      // For simplicity, we use the message's original date + rule grace period + some buffer
-      const messageDate = new Date(msg.date).getTime();
+      const now = Date.now();
       const gracePeriodMs = settings.defaultGracePeriodDays * 24 * 60 * 60 * 1000;
 
-      // If the message's send date + grace period has passed, delete permanently
-      if (now - messageDate > gracePeriodMs) {
-        try {
-          await messenger.messages.delete([msg.id], true); // true = skip trash, permanent delete
-          cleanedCount++;
+      for (const msg of messages) {
+        // Look up when this message was moved to Expired.
+        // Falls back to the message send date for messages moved before this tracking was added.
+        let movedAt;
+        if (msg.headerMessageId) {
+          const storageKey = `mailreaper_movedAt_${msg.headerMessageId}`;
+          const stored = await messenger.storage.local.get(storageKey);
+          movedAt = stored[storageKey];
+        }
+        const referenceDate = movedAt || new Date(msg.date).getTime();
 
-          await logActivity({
-            type: "grace_deleted",
-            messageId: msg.id,
-            subject: msg.subject,
-            sender: msg.author,
-            rule: "Grace period cleanup",
-            reason: `Exceeded ${settings.defaultGracePeriodDays}-day grace period`,
-          });
-        } catch (e) {
-          console.error(`[MailReaper] Grace cleanup failed for ${msg.id}:`, e);
+        // If the grace period has elapsed since the message was moved, delete permanently
+        if (now - referenceDate > gracePeriodMs) {
+          try {
+            await messenger.messages.delete([msg.id], true); // true = skip trash, permanent delete
+            cleanedCount++;
+
+            // Clean up the stored move timestamp
+            if (msg.headerMessageId) {
+              const storageKey = `mailreaper_movedAt_${msg.headerMessageId}`;
+              await messenger.storage.local.remove(storageKey);
+            }
+
+            await logActivity({
+              type: "grace_deleted",
+              messageId: msg.id,
+              subject: msg.subject,
+              sender: msg.author,
+              rule: "Grace period cleanup",
+              reason: `Exceeded ${settings.defaultGracePeriodDays}-day grace period`,
+            });
+          } catch (e) {
+            console.error(`[MailReaper] Grace cleanup failed for ${msg.id}:`, e);
+          }
         }
       }
     }
-  }
 
-  if (cleanedCount > 0) {
-    console.log(`[MailReaper] Grace period cleanup: permanently deleted ${cleanedCount} messages`);
+    if (cleanedCount > 0) {
+      console.log(`[MailReaper] Grace period cleanup: permanently deleted ${cleanedCount} messages`);
+    }
+  } catch (e) {
+    console.error("[MailReaper] Grace period cleanup failed:", e);
   }
 }
 
