@@ -23,7 +23,7 @@ const DEFAULT_SETTINGS = {
   scanEnabled: true,
 
   // Folders
-  scannedFolderIds: [], // Empty = user must configure
+  scannedFolderIds: [], // Empty = scan all inbox folders
   expiredFolderId: null, // Created on first run
 
   // LLM configuration
@@ -75,7 +75,6 @@ export async function initializeStorage() {
  */
 async function mergeBuiltinRules() {
   const rules = await getRules();
-  const defaultMap = new Map(DEFAULT_RULES.map((r) => [r.id, r]));
   let changed = false;
 
   for (const defaultRule of DEFAULT_RULES) {
@@ -227,7 +226,7 @@ export async function clearActivityLog() {
 
 // ── LLM Cache ───────────────────────────────────────────────────────────────
 
-// Expired verdicts are re-checked after 24h (in case something changed).
+// Positive verdicts (expired or classified) are re-checked after 24h.
 // "Not time-sensitive" verdicts are cached for 7 days.
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
 const CACHE_TTL_NOT_SENSITIVE_MS = 7 * 24 * 60 * 60 * 1000;

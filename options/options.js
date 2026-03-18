@@ -518,8 +518,6 @@ async function loadActivity() {
 
 document.getElementById("btnClearLog").addEventListener("click", async () => {
   if (confirm("Clear the activity log?")) {
-    // Send a message to background to clear — we could also import storage directly
-    // but keeping it consistent with the message pattern
     const { clearActivityLog } = await import("../rules/storage.js");
     await clearActivityLog();
     await loadActivity();
