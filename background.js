@@ -31,17 +31,25 @@ let lastScanError = null;
 const SCAN_STATE_KEY = "mailreaper_scan_state";
 
 async function persistScanState() {
-  await messenger.storage.local.set({
-    [SCAN_STATE_KEY]: { lastScanTime, lastScanResults, lastScanError },
-  });
+  try {
+    await messenger.storage.local.set({
+      [SCAN_STATE_KEY]: { lastScanTime, lastScanResults, lastScanError },
+    });
+  } catch (e) {
+    console.error("[MailReaper] Failed to persist scan state:", e);
+  }
 }
 
 async function restoreScanState() {
-  const { [SCAN_STATE_KEY]: state } = await messenger.storage.local.get(SCAN_STATE_KEY);
-  if (state) {
-    lastScanTime = state.lastScanTime;
-    lastScanResults = state.lastScanResults || { processed: 0, expired: 0, errors: 0 };
-    lastScanError = state.lastScanError;
+  try {
+    const { [SCAN_STATE_KEY]: state } = await messenger.storage.local.get(SCAN_STATE_KEY);
+    if (state) {
+      lastScanTime = state.lastScanTime;
+      lastScanResults = state.lastScanResults || { processed: 0, expired: 0, errors: 0 };
+      lastScanError = state.lastScanError;
+    }
+  } catch (e) {
+    console.warn("[MailReaper] Failed to restore scan state, continuing with defaults:", e);
   }
 }
 
@@ -92,9 +100,17 @@ async function setupAlarm(intervalMinutes) {
 
 messenger.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
-    await runScan();
+    try {
+      await runScan();
+    } catch (e) {
+      console.error("[MailReaper] Scan alarm handler failed:", e);
+    }
   } else if (alarm.name === GRACE_ALARM_NAME) {
-    await cleanupGracePeriod();
+    try {
+      await cleanupGracePeriod();
+    } catch (e) {
+      console.error("[MailReaper] Grace period cleanup failed:", e);
+    }
   }
 });
 
@@ -148,22 +164,26 @@ messenger.menus.onClicked.addListener(async (info) => {
 
   // Act on each selected message
   for (const msg of messages) {
-    switch (info.menuItemId) {
-      case "mailreaper-mark-receipt":
-        await handleMarkAsReceipt(msg.id);
-        break;
-      case "mailreaper-mark-expired":
-        await handleMarkAsExpired(msg.id);
-        break;
-      case "mailreaper-expire-1h":
-        await handleSetManualExpiry(msg.id, 1);
-        break;
-      case "mailreaper-expire-1d":
-        await handleSetManualExpiry(msg.id, 24);
-        break;
-      case "mailreaper-expire-7d":
-        await handleSetManualExpiry(msg.id, 168);
-        break;
+    try {
+      switch (info.menuItemId) {
+        case "mailreaper-mark-receipt":
+          await handleMarkAsReceipt(msg.id);
+          break;
+        case "mailreaper-mark-expired":
+          await handleMarkAsExpired(msg.id);
+          break;
+        case "mailreaper-expire-1h":
+          await handleSetManualExpiry(msg.id, 1);
+          break;
+        case "mailreaper-expire-1d":
+          await handleSetManualExpiry(msg.id, 24);
+          break;
+        case "mailreaper-expire-7d":
+          await handleSetManualExpiry(msg.id, 168);
+          break;
+      }
+    } catch (e) {
+      console.error(`[MailReaper] Context menu action failed for message ${msg.id}:`, e);
     }
   }
 });
@@ -345,10 +365,14 @@ async function resolveScanFolders(settings) {
     const idSet = new Set(settings.scannedFolderIds);
     const matched = allFolders.filter((f) => idSet.has(f.id));
     if (matched.length > 0) return matched;
-    console.warn("[MailReaper] No configured folders matched, falling back to Inbox");
+    // Configured folders vanished — don't fall back to inbox, that could
+    // be destructive. Surface the error and scan nothing.
+    lastScanError = "Configured scan folders not found. Check your folder settings.";
+    console.warn("[MailReaper] Configured folders not found, scanning nothing");
+    return [];
   }
 
-  // Default: scan all inbox folders
+  // No folders configured — default to all inbox folders
   return allFolders.filter((f) => f.type === "inbox");
 }
 
@@ -386,6 +410,7 @@ async function getCandidateMessages(folder, cutoffDate, settings) {
     }
   } catch (e) {
     console.error(`[MailReaper] Query failed for folder ${folder.path}:`, e);
+    throw e;
   }
 
   console.log(`[MailReaper] Found ${messages.length} candidate messages in ${folder.name}`);
@@ -574,7 +599,7 @@ async function getMessageInfo(messageId) {
     return info;
   } catch (e) {
     console.error("[MailReaper] getMessageInfo failed:", e);
-    return { status: [] };
+    return { status: [{ icon: "⚠️", text: `Error loading info: ${e.message}` }] };
   }
 }
 
@@ -743,14 +768,20 @@ async function handleSetManualExpiry(messageId, hours) {
  * Used to attach undo metadata after executeAction logs the entry.
  */
 async function patchLastActivity(messageId, patch) {
-  const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
-    await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
-  if (!log) return;
+  try {
+    const { [STORAGE_KEYS.ACTIVITY_LOG]: log } =
+      await messenger.storage.local.get(STORAGE_KEYS.ACTIVITY_LOG);
+    if (!log) return;
 
-  const entry = log.find((e) => e.messageId === messageId);
-  if (entry) {
-    Object.assign(entry, patch);
-    await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+    const entry = log.find((e) => e.messageId === messageId);
+    if (entry) {
+      Object.assign(entry, patch);
+      await messenger.storage.local.set({ [STORAGE_KEYS.ACTIVITY_LOG]: log });
+    } else {
+      console.warn(`[MailReaper] patchLastActivity: no log entry found for message ${messageId}`);
+    }
+  } catch (e) {
+    console.error("[MailReaper] patchLastActivity failed:", e);
   }
 }
 
