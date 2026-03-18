@@ -223,14 +223,31 @@ function parseJsonResponse(text) {
 
     // Validate and normalize the response shape
     if (parsed.confidence === undefined && parsed.score === undefined) {
-      console.warn("[MailReaper] LLM response missing confidence field, defaulting to 0.5");
+      console.warn("[MailReaper] LLM response missing confidence field, defaulting to 1.0 (trusting verdict)");
     }
-    const rawConfidence = Number(parsed.confidence ?? parsed.score ?? 0.5);
-    const confidence = Number.isNaN(rawConfidence) ? 0.5 : Math.max(0, Math.min(1, rawConfidence));
+    if (parsed.score !== undefined && parsed.confidence === undefined) {
+      console.debug("[MailReaper] LLM used 'score' instead of 'confidence'");
+    }
+    const rawConfidence = Number(parsed.confidence ?? parsed.score ?? 1.0);
+    const confidence = Number.isNaN(rawConfidence) ? 1.0 : Math.max(0, Math.min(1, rawConfidence));
+
+    if (parsed.is_time_sensitive !== undefined && parsed.isTimeSensitive === undefined) {
+      console.debug("[MailReaper] LLM used 'is_time_sensitive' instead of 'isTimeSensitive'");
+    }
+    if (parsed.expires_at !== undefined && parsed.expiresAt === undefined) {
+      console.debug("[MailReaper] LLM used 'expires_at' instead of 'expiresAt'");
+    }
+    if (parsed.explanation !== undefined && parsed.reason === undefined) {
+      console.debug("[MailReaper] LLM used 'explanation' instead of 'reason'");
+    }
 
     const rawExpiresAt = parsed.expiresAt ?? parsed.expires_at ?? null;
     const parsedDate = rawExpiresAt != null ? new Date(rawExpiresAt) : null;
     const expiresAt = parsedDate && !Number.isNaN(parsedDate.getTime()) ? rawExpiresAt : null;
+
+    if (rawExpiresAt != null && expiresAt === null) {
+      console.debug(`[MailReaper] LLM returned unparseable expiresAt: "${rawExpiresAt}"`);
+    }
 
     return {
       isTimeSensitive: !!(parsed.isTimeSensitive ?? parsed.is_time_sensitive ?? false),
