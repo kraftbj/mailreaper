@@ -198,7 +198,13 @@ export async function cleanupGracePeriod() {
     let cleanedCount = 0;
 
     for (const account of accounts) {
-      const expiredFolder = await findNamedFolder(account.id, EXPIRED_FOLDER_NAME);
+      let expiredFolder;
+      try {
+        expiredFolder = await findNamedFolder(account.id, EXPIRED_FOLDER_NAME);
+      } catch (e) {
+        console.error(`[MailReaper] Grace cleanup: failed to find Expired folder for account ${account.id}:`, e);
+        continue;
+      }
       if (!expiredFolder) continue;
 
       // Get all messages in the Expired folder

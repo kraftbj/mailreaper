@@ -27,8 +27,8 @@ document.querySelectorAll(".tab").forEach((tab) => {
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
 
     // Lazy-load tab content
-    if (tab.dataset.tab === "folders") loadFolders();
-    if (tab.dataset.tab === "activity") loadActivity();
+    if (tab.dataset.tab === "folders") loadFolders().catch((e) => console.error("[MailReaper] Folders tab failed:", e));
+    if (tab.dataset.tab === "activity") loadActivity().catch((e) => console.error("[MailReaper] Activity tab failed:", e));
   });
 });
 
@@ -72,7 +72,9 @@ document.getElementById("btnSaveGeneral").addEventListener("click", async () => 
 // ── Rules Tab ───────────────────────────────────────────────────────────────
 
 async function loadRules() {
-  currentRules = await messenger.runtime.sendMessage({ type: "getRules" });
+  const result = await messenger.runtime.sendMessage({ type: "getRules" });
+  if (result?.error) throw new Error(result.error);
+  currentRules = result;
   renderRulesList();
 }
 
@@ -418,6 +420,7 @@ async function loadFolders() {
   selectedFolderIds = new Set(currentSettings.scannedFolderIds || []);
 
   const accounts = await messenger.runtime.sendMessage({ type: "getAccounts" });
+  if (accounts?.error) throw new Error(accounts.error);
   const container = document.getElementById("folderTree");
 
   if (!accounts || accounts.length === 0) {
@@ -541,7 +544,12 @@ async function loadActivity() {
     type: "getActivityLog",
     limit: 100,
   });
-  const log = result?.error ? [] : result;
+  if (result?.error) {
+    document.getElementById("activityTable").innerHTML =
+      `<div class="empty-state">Failed to load activity: ${escapeHtml(result.error)}</div>`;
+    return;
+  }
+  const log = result;
 
   const container = document.getElementById("activityTable");
 

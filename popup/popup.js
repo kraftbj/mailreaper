@@ -187,6 +187,7 @@ document.getElementById("btnScan").addEventListener("click", async () => {
     await messenger.runtime.sendMessage({ type: "triggerScan" });
   } catch (e) {
     console.error("Scan trigger failed:", e);
+    btn.textContent = "Scan failed";
   }
 
   // Keep button disabled briefly to prevent double-clicks; loadStatus
