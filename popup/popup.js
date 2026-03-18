@@ -17,7 +17,7 @@ async function loadStatus() {
     const [status, settings, activityLog] = await Promise.all([
       messenger.runtime.sendMessage({ type: "getStatus" }),
       messenger.runtime.sendMessage({ type: "getSettings" }),
-      messenger.runtime.sendMessage({ type: "getActivityLog", limit: 5 }),
+      messenger.runtime.sendMessage({ type: "getActivityLog", limit: 3 }),
     ]);
 
     // Status dot

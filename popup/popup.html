@@ -21,6 +21,8 @@
 
     body {
       width: 420px;
+      max-height: 500px;
+      overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       color: var(--text);
@@ -31,7 +33,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 14px 16px;
+      padding: 10px 16px;
       border-bottom: 1px solid var(--border);
       background: var(--bg-secondary);
     }
@@ -71,12 +73,12 @@
 
     .stat {
       background: var(--bg);
-      padding: 12px;
+      padding: 8px;
       text-align: center;
     }
 
     .stat-value {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
       color: var(--accent);
     }
@@ -86,25 +88,25 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: var(--text-muted);
-      margin-top: 2px;
+      margin-top: 1px;
     }
 
     .info-rows {
-      padding: 12px 16px;
+      padding: 6px 16px;
       border-bottom: 1px solid var(--border);
     }
 
     .info-row {
       display: flex;
       justify-content: space-between;
-      padding: 4px 0;
+      padding: 2px 0;
       font-size: 12px;
     }
 
     .info-row .label { color: var(--text-muted); }
 
     .activity {
-      padding: 10px 16px;
+      padding: 6px 16px;
       border-bottom: 1px solid var(--border);
     }
 
@@ -113,13 +115,13 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: var(--text-muted);
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
 
     .activity-item {
       display: flex;
       gap: 8px;
-      padding: 5px 0;
+      padding: 3px 0;
       font-size: 12px;
       border-bottom: 1px solid var(--border);
     }
@@ -220,8 +222,8 @@
     <span id="statusDot" class="status-dot inactive"></span>
   </div>
 
-  <div id="scanProgress" style="display:none; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--border);">
-    <div style="display:flex; justify-content:space-between; margin-bottom: 4px;">
+  <div id="scanProgress" style="display:none; padding: 4px 16px; font-size: 12px; border-bottom: 1px solid var(--border);">
+    <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
       <span>Scanning...</span>
       <span id="progressText">0 / 0</span>
     </div>
@@ -271,16 +273,14 @@
     </div>
   </div>
 
-  <div id="selectedMessage" style="display:none; padding: 10px 16px; border-bottom: 1px solid var(--border);">
-    <h3 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px;">Selected Message</h3>
-    <div id="selectedSubject" style="font-size: 12px; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title=""></div>
-    <div id="messageInfo" style="display: none; margin-bottom: 6px;"></div>
-    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
-      <button id="btnMarkReceipt" style="flex: none; padding: 6px 10px; font-size: 11px;">Mark as Receipt</button>
-      <button id="btnMarkExpired" style="flex: none; padding: 6px 10px; font-size: 11px;">Mark as Expired</button>
-    </div>
-    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
-      <select id="expiryPreset" style="flex: 1; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text); font-size: 11px;">
+  <div id="selectedMessage" style="display:none; padding: 6px 16px; border-bottom: 1px solid var(--border);">
+    <h3 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 4px;">Selected Message</h3>
+    <div id="selectedSubject" style="font-size: 12px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title=""></div>
+    <div id="messageInfo" style="display: none; margin-bottom: 4px;"></div>
+    <div style="display: flex; gap: 6px; margin-bottom: 4px;">
+      <button id="btnMarkReceipt" style="flex: none; padding: 4px 8px; font-size: 11px;">Mark as Receipt</button>
+      <button id="btnMarkExpired" style="flex: none; padding: 4px 8px; font-size: 11px;">Mark as Expired</button>
+      <select id="expiryPreset" style="flex: 1; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); color: var(--text); font-size: 11px;">
         <option value="1">1 hour</option>
         <option value="3">3 hours</option>
         <option value="24" selected>1 day</option>
@@ -288,15 +288,15 @@
         <option value="168">7 days</option>
         <option value="720">30 days</option>
       </select>
-      <button id="btnSetExpiry" style="flex: none; padding: 6px 10px; font-size: 11px;">Set Expiry</button>
+      <button id="btnSetExpiry" style="flex: none; padding: 4px 8px; font-size: 11px;">Set Expiry</button>
     </div>
     <div id="selectedStatus" style="font-size: 11px; color: var(--accent-green); display: none;"></div>
   </div>
 
-  <div class="actions">
-    <button class="primary" id="btnScan">Scan Now</button>
-    <button id="btnDiagnose">Diagnose</button>
-    <button id="btnSettings">Settings</button>
+  <div class="actions" style="padding: 8px 16px;">
+    <button class="primary" id="btnScan" style="padding: 6px 12px;">Scan Now</button>
+    <button id="btnDiagnose" style="padding: 6px 12px;">Diagnose</button>
+    <button id="btnSettings" style="padding: 6px 12px;">Settings</button>
   </div>
 
   <div id="diagOutput" style="display:none; padding: 8px 16px; font-size: 11px; font-family: monospace; white-space: pre-wrap; color: var(--text-muted); max-height: 300px; overflow-y: auto; border-top: 1px solid var(--border);"></div>
