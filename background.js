@@ -46,8 +46,9 @@ async function restoreScanState() {
 }
 
 // Tracks messages already evaluated with no match.
-// Keyed by message ID, value is the rules fingerprint at evaluation time.
-// When rules change, only messages affected by the change are re-evaluated.
+// Keyed by message ID, value is { fingerprint, trace } where fingerprint is
+// the rules fingerprint at evaluation time and trace lists rules checked.
+// When rules change, the cache is cleared so messages are re-evaluated.
 let evaluatedNoMatch = new Map();
 let currentRulesFingerprint = null;
 
@@ -584,11 +585,11 @@ function formatRelativeTimeBackground(date) {
   const absDiffMin = Math.round(Math.abs(diffMs) / 60000);
 
   if (absDiffMin < 1) return future ? "now" : "just now";
-  if (absDiffMin < 60) return `in ${absDiffMin}m`;
+  if (absDiffMin < 60) return future ? `in ${absDiffMin}m` : `${absDiffMin}m ago`;
   const diffHr = Math.round(absDiffMin / 60);
-  if (diffHr < 24) return `in ${diffHr}h`;
+  if (diffHr < 24) return future ? `in ${diffHr}h` : `${diffHr}h ago`;
   const diffDays = Math.round(diffHr / 24);
-  return `in ${diffDays}d`;
+  return future ? `in ${diffDays}d` : `${diffDays}d ago`;
 }
 
 // ── Manual Action Handlers ───────────────────────────────────────────────────
