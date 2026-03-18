@@ -119,9 +119,9 @@ function matchesRule(message, rule) {
     if (!subjectMatch) return false;
   }
 
-  // Rules that only have headerMatch and no sender/subject patterns
-  // (like the Expires header rule) match all messages — the header check
-  // happens in evaluateExpiration where we lazily fetch full headers.
+  // Rules with no sender/subject/folder patterns (like the Expires header
+  // rule) match all messages — the header check happens in evaluateExpiration
+  // where we lazily fetch full headers.
 
   return true;
 }

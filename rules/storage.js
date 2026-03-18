@@ -252,7 +252,7 @@ export async function clearActivityLog() {
 // Cache TTL tiers (checked in order):
 //   1. Errors (error field set)            → 10 minutes, allows prompt retry
 //   2. Expired or classified               → 24 hours, re-check in case of undo
-//   3. Future expiration (has expiresAt)    → 24 hours, re-evaluate before expiry
+//   3. Future expiration (has expiresAt)    → 24 hours, periodic re-check
 //   4. Not time-sensitive (everything else) → 7 days, low churn
 const CACHE_TTL_EXPIRED_MS = 24 * 60 * 60 * 1000;
 const CACHE_TTL_NOT_SENSITIVE_MS = 7 * 24 * 60 * 60 * 1000;

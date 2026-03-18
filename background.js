@@ -59,6 +59,7 @@ async function restoreScanState() {
 // When rules change, the cache is cleared so messages are re-evaluated.
 // In-memory only — resets on service worker restart, which is acceptable
 // since re-evaluation is cheap compared to LLM calls.
+// Capped at 10,000 entries (oldest evicted first).
 let evaluatedNoMatch = new Map();
 let currentRulesFingerprint = null;
 
