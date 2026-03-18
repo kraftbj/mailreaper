@@ -202,12 +202,19 @@ function parseJsonResponse(text) {
   try {
     const parsed = JSON.parse(cleaned);
 
-    // Normalize the response shape
+    // Validate and normalize the response shape
+    const rawConfidence = Number(parsed.confidence ?? parsed.score ?? 0.5);
+    const confidence = Number.isNaN(rawConfidence) ? 0.5 : Math.max(0, Math.min(1, rawConfidence));
+
+    const rawExpiresAt = parsed.expiresAt ?? parsed.expires_at ?? null;
+    const parsedDate = rawExpiresAt != null ? new Date(rawExpiresAt) : null;
+    const expiresAt = parsedDate && !Number.isNaN(parsedDate.getTime()) ? rawExpiresAt : null;
+
     return {
-      isTimeSensitive: Boolean(parsed.isTimeSensitive ?? parsed.is_time_sensitive ?? false),
-      expiresAt: parsed.expiresAt ?? parsed.expires_at ?? null,
+      isTimeSensitive: !!(parsed.isTimeSensitive ?? parsed.is_time_sensitive ?? false),
+      expiresAt,
       reason: String(parsed.reason ?? parsed.explanation ?? "No reason given"),
-      confidence: Number(parsed.confidence ?? parsed.score ?? 0.5),
+      confidence,
       // For classification responses
       ...(parsed.matches !== undefined && { matches: Boolean(parsed.matches) }),
       // For rule generation responses
