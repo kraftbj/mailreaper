@@ -35,3 +35,15 @@ The default-enabled OTP rule has `gracePeriodDays: 0`. Combined with the 10-minu
 - Accept this as intentional for ephemeral OTP codes (current behavior)
 - Set a minimum floor (e.g., 1 day) in cleanup
 - Change OTP rule default to `gracePeriodDays: 1`
+
+### 5. Error response protocol between background and UI
+
+The `onMessage` handler catches errors and returns `{ error: e.message }`. This object can be consumed as valid data by callers that don't check for the `error` field (now partially mitigated — options loaders check for `.error`). A more robust protocol would wrap all responses as `{ ok, data }` or re-throw so `sendMessage` rejects. This would be a significant refactor.
+
+### 6. LLM says `isTimeSensitive: true` with no `expiresAt`
+
+When the LLM identifies a message as time-sensitive but provides no expiration date, the verdict is silently treated as "not time-sensitive." The LLM's signal is lost. Could cache a flag like `timeSensitiveNoDate: true` and surface it in message info.
+
+### 7. Silent normalization of malformed LLM responses
+
+`parseJsonResponse` silently normalizes wrong field names (`expires_at` → `expiresAt`, etc.) and missing values. Adding debug logging would help diagnose why LLM "isn't working" with certain models.
