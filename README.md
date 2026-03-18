@@ -117,6 +117,7 @@ mailreaper/
 - [ ] "Create Rule from Examples" UI flow (LLM backend is ready in adapter.js)
 - [ ] Per-rule folder scoping (data model supports it, UI doesn't expose it yet)
 - [x] Undo support for individual actions
+- [ ] Surface messages flagged as time-sensitive by LLM but without a parseable expiration date
 - [ ] IMAP-specific edge cases (offline folders, slow connections)
 - [ ] ATN submission and review
 - [ ] Localization beyond English

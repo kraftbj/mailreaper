@@ -7,43 +7,11 @@ These items were flagged during automated review but require a design decision.
 - **Gemini API key in plaintext storage** — inherent to browser extensions, no secure credential store in Thunderbird
 - **innerHTML with hardcoded icons** — values are not user-controlled, practical risk is zero
 - **ReDoS from user content-regex** — user-controlled, body truncated to 50k, regex validated at save time
+- **Storage leak of `mailreaper_movedAt_*` entries** — messages without `headerMessageId` accumulate in Expired rather than being permanently deleted. Safer than premature deletion; manual cleanup if needed.
+- **Error response protocol between background and UI** — partial mitigation in place (options loaders check for `.error`). Full `{ ok, data }` protocol would be a significant refactor.
 
 ## Needs Decision
 
-### 1. Imputed LLM confidence (0.5) silently drops verdicts
+### 1. LLM says `isTimeSensitive: true` with no `expiresAt`
 
-When an LLM model omits the `confidence` field, it defaults to 0.5 which is below the 0.7 threshold, causing all verdicts from that model to be silently discarded. A `console.warn` and trace entry are logged, but the user may not notice. Options:
-- Accept 0.5 as reasonable (current behavior)
-- Treat missing confidence as 1.0 (trust the LLM)
-- Treat missing confidence as an error (retry after 10m)
-- Surface more prominently in the popup
-
-### 2. `headerMatch` in rule definitions is dead code
-
-The `match.headerMatch` field in rule definitions is never evaluated by `matchesRule()`. The builtin Expires header rule works because the header check happens in `evaluateExpiration`, but if a user creates a header-type rule, `headerMatch` gives the false impression of filtering. Options:
-- Implement `headerMatch` checking in `matchesRule` (requires lazy full headers, performance cost)
-- Remove `headerMatch` from the rule structure and options UI (simplest)
-- Keep as-is and document that header matching happens in evaluation, not filtering
-
-### 3. Storage leak of `mailreaper_movedAt_*` entries
-
-When messages without `headerMessageId` are moved to Expired, no `movedAt` entry is created (and now those messages are never permanently deleted). Over time, messages without `headerMessageId` accumulate in the Expired folder. This is safer than premature deletion but may need a manual cleanup mechanism eventually.
-
-### 4. OTP rule `gracePeriodDays: 0` allows permanent deletion within minutes
-
-The default-enabled OTP rule has `gracePeriodDays: 0`. Combined with the 10-minute initial grace cleanup delay, a false positive (legitimate email with "verify your" in the subject) would be permanently deleted ~8 minutes after being moved. Options:
-- Accept this as intentional for ephemeral OTP codes (current behavior)
-- Set a minimum floor (e.g., 1 day) in cleanup
-- Change OTP rule default to `gracePeriodDays: 1`
-
-### 5. Error response protocol between background and UI
-
-The `onMessage` handler catches errors and returns `{ error: e.message }`. This object can be consumed as valid data by callers that don't check for the `error` field (now partially mitigated — options loaders check for `.error`). A more robust protocol would wrap all responses as `{ ok, data }` or re-throw so `sendMessage` rejects. This would be a significant refactor.
-
-### 6. LLM says `isTimeSensitive: true` with no `expiresAt`
-
-When the LLM identifies a message as time-sensitive but provides no expiration date, the verdict is silently treated as "not time-sensitive." The LLM's signal is lost. Could cache a flag like `timeSensitiveNoDate: true` and surface it in message info.
-
-### 7. Silent normalization of malformed LLM responses
-
-`parseJsonResponse` silently normalizes wrong field names (`expires_at` → `expiresAt`, etc.) and missing values. Adding debug logging would help diagnose why LLM "isn't working" with certain models.
+When the LLM identifies a message as time-sensitive but provides no expiration date, the verdict is silently treated as "not time-sensitive." The LLM's signal is lost. Could cache a flag like `timeSensitiveNoDate: true` and surface it in message info. Tracked as a TODO in README.
