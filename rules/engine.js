@@ -211,8 +211,8 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
 
       // Check cache first using Message-ID header
       const fullMessage = await lazyFull();
-      const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId;
-      if (messageIdHeader) {
+      const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId || `_msgid_${message.id}`;
+      {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
           if (cached.error) return { llmError: true };
@@ -317,8 +317,8 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
       if (settings.llmProvider === "none") return null;
 
       const fullMessage = await lazyFull();
-      const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId;
-      if (messageIdHeader) {
+      const messageIdHeader = getHeader(fullMessage, "Message-ID") || message.headerMessageId || `_msgid_${message.id}`;
+      {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
           if (cached.error) return { llmError: true };

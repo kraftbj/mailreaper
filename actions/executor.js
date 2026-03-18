@@ -37,15 +37,19 @@ export async function executeAction(message, verdict) {
     }
   } catch (e) {
     console.error(`[MailReaper] Action failed for message ${message.id}:`, e);
-    await logActivity({
-      type: "error",
-      messageId: message.id,
-      subject: message.subject,
-      sender: message.author,
-      rule: rule.name,
-      action: rule.action,
-      error: e.message,
-    });
+    try {
+      await logActivity({
+        type: "error",
+        messageId: message.id,
+        subject: message.subject,
+        sender: message.author,
+        rule: rule.name,
+        action: rule.action,
+        error: e.message,
+      });
+    } catch (logErr) {
+      console.error("[MailReaper] Failed to log action error:", logErr);
+    }
     throw e;
   }
 }

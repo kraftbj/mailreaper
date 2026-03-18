@@ -35,7 +35,9 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // ── General Tab ─────────────────────────────────────────────────────────────
 
 async function loadGeneral() {
-  currentSettings = await messenger.runtime.sendMessage({ type: "getSettings" });
+  const result = await messenger.runtime.sendMessage({ type: "getSettings" });
+  if (result?.error) throw new Error(result.error);
+  currentSettings = result;
 
   document.getElementById("scanEnabled").checked = currentSettings.scanEnabled;
   document.getElementById("scanInterval").value = currentSettings.scanIntervalMinutes;
@@ -299,7 +301,9 @@ document.getElementById("btnCancelRule").addEventListener("click", () => {
 // ── LLM Tab ─────────────────────────────────────────────────────────────────
 
 async function loadLlm() {
-  currentSettings = await messenger.runtime.sendMessage({ type: "getSettings" });
+  const result = await messenger.runtime.sendMessage({ type: "getSettings" });
+  if (result?.error) throw new Error(result.error);
+  currentSettings = result;
 
   document.getElementById("llmProvider").value = currentSettings.llmProvider;
   document.getElementById("geminiApiKey").value = currentSettings.geminiApiKey;
@@ -408,7 +412,9 @@ document.getElementById("btnTestLlm").addEventListener("click", async () => {
 let selectedFolderIds = new Set();
 
 async function loadFolders() {
-  currentSettings = await messenger.runtime.sendMessage({ type: "getSettings" });
+  const result = await messenger.runtime.sendMessage({ type: "getSettings" });
+  if (result?.error) throw new Error(result.error);
+  currentSettings = result;
   selectedFolderIds = new Set(currentSettings.scannedFolderIds || []);
 
   const accounts = await messenger.runtime.sendMessage({ type: "getAccounts" });
@@ -531,10 +537,11 @@ const ACTION_ICONS = {
 };
 
 async function loadActivity() {
-  const log = await messenger.runtime.sendMessage({
+  const result = await messenger.runtime.sendMessage({
     type: "getActivityLog",
     limit: 100,
   });
+  const log = result?.error ? [] : result;
 
   const container = document.getElementById("activityTable");
 

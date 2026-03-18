@@ -191,6 +191,8 @@ messenger.menus.onClicked.addListener(async (info) => {
         case "mailreaper-expire-7d":
           await handleSetManualExpiry(msg.id, 168);
           break;
+        default:
+          console.warn(`[MailReaper] Unhandled context menu item: ${info.menuItemId}`);
       }
     } catch (e) {
       console.error(`[MailReaper] Context menu action failed for message ${msg.id}:`, e);
