@@ -83,8 +83,12 @@ async function init() {
     delayInMinutes: 10, // First run 10 minutes after startup
   });
 
-  // Set up context menus for message actions
-  await setupContextMenus();
+  // Context menus are non-critical — don't let a failure block scanning
+  try {
+    await setupContextMenus();
+  } catch (e) {
+    console.error("[MailReaper] Context menu setup failed (non-fatal):", e);
+  }
 
   console.log("[MailReaper] Initialized. Scan interval:", settings.scanIntervalMinutes, "minutes");
 }
@@ -509,7 +513,7 @@ messenger.runtime.onMessage.addListener(async (message, sender) => {
 
       default:
         console.warn("[MailReaper] Unknown message type:", message.type);
-        return null;
+        return { error: `Unknown message type: ${message.type}` };
     }
   } catch (e) {
     console.error("[MailReaper] onMessage handler error:", e);
@@ -841,13 +845,11 @@ async function handleUndoManualAction(logId) {
         if (!entry.headerMessageId) {
           return { success: false, error: "Cannot undo: message lacks a Message-ID header" };
         }
-        let currentMessageId = entry.messageId;
-        if (entry.headerMessageId) {
-          const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
-          if (results.messages && results.messages.length > 0) {
-            currentMessageId = results.messages[0].id;
-          }
+        const results = await messenger.messages.query({ headerMessageId: entry.headerMessageId });
+        if (!results.messages || results.messages.length === 0) {
+          return { success: false, error: "Message not found — it may have been deleted" };
         }
+        const currentMessageId = results.messages[0].id;
 
         // Move message back to original folder
         await messenger.messages.move([currentMessageId], entry.originalFolderId);

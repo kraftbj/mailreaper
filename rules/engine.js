@@ -216,12 +216,16 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
           if (cached.error) return { llmError: true };
+          // Always check confidence threshold on cache hits — user may have raised it
+          const threshold = settings.llmConfidenceThreshold ?? 0.7;
           if (cached.expired) {
+            if ((cached.confidence ?? 0) < threshold) {
+              return { skippedTrace: `Cached LLM verdict below confidence threshold (${cached.confidence} < ${threshold})` };
+            }
             return { ...cached, rule };
           }
           // Re-evaluate cached future expiration against current time
           if (cached.expiresAt && now > new Date(cached.expiresAt)) {
-            const threshold = settings.llmConfidenceThreshold ?? 0.7;
             if ((cached.confidence ?? 0) < threshold) {
               return { skippedTrace: `Cached LLM verdict expired but below confidence threshold (${cached.confidence} < ${threshold})` };
             }
@@ -254,11 +258,12 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         console.log(`[MailReaper] LLM result for "${message.subject}":`, JSON.stringify(llmResult));
 
         const isExpired = llmResult.isTimeSensitive && llmResult.expiresAt && now > new Date(llmResult.expiresAt);
+        const meetsThreshold = (llmResult.confidence ?? 0) >= (settings.llmConfidenceThreshold ?? 0.7);
 
-        // Cache the result
+        // Cache the result — only mark expired if confidence meets threshold
         if (messageIdHeader) {
           await setCachedVerdict(messageIdHeader, {
-            expired: isExpired,
+            expired: isExpired && meetsThreshold,
             expiresAt: llmResult.expiresAt,
             reason: llmResult.reason,
             confidence: llmResult.confidence,
@@ -317,7 +322,13 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
         const cached = await getCachedVerdict(messageIdHeader);
         if (cached) {
           if (cached.error) return { llmError: true };
-          if (cached.classified) return { ...cached, rule };
+          if (cached.classified) {
+            const threshold = settings.llmConfidenceThreshold ?? 0.7;
+            if ((cached.confidence ?? 0) < threshold) {
+              return null; // Below current threshold
+            }
+            return { ...cached, rule };
+          }
           return null;
         }
       }
