@@ -28,6 +28,8 @@ Debug via Thunderbird's Add-on Developer Tools console (debug button next to the
 - `header` — parses RFC `Expires` header
 - `content-regex` — regex with capture group for date extraction
 - `llm` — dispatches to LLM adapter, caches verdict by Message-ID
+- `classify` — pattern-based classification, moves to a named folder (e.g. Paper-Trail)
+- `llm-classify` — LLM-based category detection (e.g. receipt scanning)
 
 **Rule structure** (see `rules/defaults.js`): `match` object has `senderPatterns`, `subjectPatterns` (glob syntax), `folders`, `headerMatch`. `expiration` object specifies type and parameters.
 

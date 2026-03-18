@@ -6,7 +6,7 @@
  */
 
 import { getRules, getSettings, getCachedVerdict, setCachedVerdict, getTrainingExamples } from "./storage.js";
-import { analyzeMesageWithLlm, classifyMessageWithLlm } from "../llm/adapter.js";
+import { analyzeMessageWithLlm, classifyMessageWithLlm } from "../llm/adapter.js";
 
 /**
  * Evaluate a single message against all enabled rules (in priority order).
@@ -220,7 +220,7 @@ async function evaluateExpiration(message, lazyFull, lazyBody, rule, settings) {
 
         const expiryExamples = await getTrainingExamples("expiry");
 
-        const llmResult = await analyzeMesageWithLlm({
+        const llmResult = await analyzeMessageWithLlm({
           sender: message.author,
           subject: message.subject,
           sentDate: sentDate.toISOString(),

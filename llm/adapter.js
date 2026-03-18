@@ -13,7 +13,7 @@ import { buildAnalysisPrompt, buildRuleGenerationPrompt, buildClassificationProm
  * @param {Array<object>} examples - Training examples for few-shot prompting
  * @returns {Promise<object>} { isTimeSensitive, expiresAt, reason, confidence }
  */
-export async function analyzeMesageWithLlm(messageData, settings, examples) {
+export async function analyzeMessageWithLlm(messageData, settings, examples) {
   const prompt = buildAnalysisPrompt(messageData, examples);
 
   switch (settings.llmProvider) {
