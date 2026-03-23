@@ -27,6 +27,11 @@ let lastScanTime = null;
 let lastScanResults = { processed: 0, expired: 0, errors: 0 };
 let lastScanError = null;
 
+// Gate message handlers behind init completion to prevent race conditions
+// when the service worker wakes from suspension.
+let initReady;
+const initPromise = new Promise((resolve) => { initReady = resolve; });
+
 // Persist scan state so it survives service worker suspension
 const SCAN_STATE_KEY = "mailreaper_scan_state";
 
@@ -106,6 +111,7 @@ async function setupAlarm(intervalMinutes) {
 // ── Alarm Handler ───────────────────────────────────────────────────────────
 
 messenger.alarms.onAlarm.addListener(async (alarm) => {
+  await initPromise;
   if (alarm.name === ALARM_NAME) {
     try {
       await runScan();
@@ -449,6 +455,8 @@ async function getCandidateMessages(folder, cutoffDate, settings) {
 // ── Message Handler for Runtime Communication ───────────────────────────────
 
 messenger.runtime.onMessage.addListener(async (message, sender) => {
+  // Wait for init to finish so restored state is available
+  await initPromise;
   try {
     switch (message.type) {
       case "getStatus":
@@ -1121,8 +1129,12 @@ messenger.storage.onChanged.addListener((changes, area) => {
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
-init().catch(async (e) => {
+init().then(() => {
+  initReady();
+}).catch(async (e) => {
   console.error("[MailReaper] Init failed:", e);
   lastScanError = `Initialization failed: ${e.message}`;
   await persistScanState();
+  // Resolve even on failure so the popup doesn't hang forever
+  initReady();
 });
