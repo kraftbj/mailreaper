@@ -12,9 +12,10 @@ import (
 
 // mockMailClient implements MailClient for testing.
 type mockMailClient struct {
-	messages    []imappkg.FetchedMessage
-	movedMsgs   []string
-	inboxMsgIDs []string
+	messages       []imappkg.FetchedMessage
+	movedMsgs      []string
+	inboxMsgIDs    []string
+	folderMessages map[string][]imappkg.FetchedMessage
 }
 
 func (m *mockMailClient) FetchNewMessages(folder string, since time.Time, maxAge time.Duration, limit int) ([]imappkg.FetchedMessage, error) {
@@ -32,6 +33,10 @@ func (m *mockMailClient) EnsureFolder(name string) error {
 
 func (m *mockMailClient) GetMessageIDsInFolder(folder string) ([]string, error) {
 	return m.inboxMsgIDs, nil
+}
+
+func (m *mockMailClient) GetMessagesInFolder(folder string) ([]imappkg.FetchedMessage, error) {
+	return m.folderMessages[folder], nil
 }
 
 func (m *mockMailClient) FetchBody(folder string, uid uint32) (string, error) {
@@ -240,5 +245,171 @@ func TestScanSkipsLLMWhenProviderNone(t *testing.T) {
 	// With provider=none, LLM rules are skipped — no moves should happen.
 	if len(client.movedMsgs) != 0 {
 		t.Errorf("expected 0 moved messages (LLM skipped), got %d", len(client.movedMsgs))
+	}
+}
+
+// TestDetectManualClassifications verifies that messages found in a category
+// folder with no existing verdict are recorded as manual classifications.
+func TestDetectManualClassifications(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	// Seed a category pointing at a triage folder.
+	cat := db.Category{
+		ID:         "cat-newsletters",
+		Name:       "Newsletters",
+		FolderName: "Folders/AI-Triage/Newsletters",
+	}
+	if err := database.SaveCategory(cat); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+
+	// One message sitting in the triage folder, no verdict in DB.
+	msg := imappkg.FetchedMessage{
+		UID:       42,
+		MessageID: "<newsletter-manual-001@example.com>",
+		Subject:   "Weekly Digest",
+		Sender:    "digest@example.com",
+		Date:      time.Now().Add(-48 * time.Hour),
+		Folder:    "Folders/AI-Triage/Newsletters",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Newsletters": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	if err := s.DetectManualClassifications(client, "acct1"); err != nil {
+		t.Fatalf("DetectManualClassifications: %v", err)
+	}
+
+	// Verdict should have been created with status "manual".
+	v, err := database.GetVerdictByMessageID("<newsletter-manual-001@example.com>")
+	if err != nil {
+		t.Fatalf("get verdict: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected verdict, got nil")
+	}
+	if v.Status != "manual" {
+		t.Errorf("expected status %q, got %q", "manual", v.Status)
+	}
+	if v.DestinationFolder != "Folders/AI-Triage/Newsletters" {
+		t.Errorf("expected destination folder %q, got %q", "Folders/AI-Triage/Newsletters", v.DestinationFolder)
+	}
+	if v.Confidence != 1.0 {
+		t.Errorf("expected confidence 1.0, got %f", v.Confidence)
+	}
+
+	// Training example should have been recorded.
+	examples, err := database.GetTrainingExamples(cat.ID)
+	if err != nil {
+		t.Fatalf("get training examples: %v", err)
+	}
+	if len(examples) != 1 {
+		t.Fatalf("expected 1 training example, got %d", len(examples))
+	}
+	if examples[0].Source != "manual" {
+		t.Errorf("expected source %q, got %q", "manual", examples[0].Source)
+	}
+	if examples[0].Subject != msg.Subject {
+		t.Errorf("expected subject %q, got %q", msg.Subject, examples[0].Subject)
+	}
+
+	// Activity log should have an entry.
+	log, err := database.GetActivityLog(10)
+	if err != nil {
+		t.Fatalf("get activity log: %v", err)
+	}
+	if len(log) != 1 {
+		t.Fatalf("expected 1 activity entry, got %d", len(log))
+	}
+	if log[0].Type != "manual_classify" {
+		t.Errorf("expected activity type %q, got %q", "manual_classify", log[0].Type)
+	}
+	if log[0].Destination != "Folders/AI-Triage/Newsletters" {
+		t.Errorf("expected destination %q, got %q", "Folders/AI-Triage/Newsletters", log[0].Destination)
+	}
+}
+
+// TestDetectManualClassificationsSkipsExistingVerdicts verifies that messages
+// already in the DB (processed by the scanner previously) are not re-recorded.
+func TestDetectManualClassificationsSkipsExistingVerdicts(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	cat := db.Category{
+		ID:         "cat-receipts",
+		Name:       "Receipts",
+		FolderName: "Folders/AI-Triage/Receipts",
+	}
+	if err := database.SaveCategory(cat); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+
+	// Pre-seed a verdict so the message looks like it was handled by the scanner.
+	now := time.Now().UTC()
+	if err := database.SaveVerdict(db.Verdict{
+		AccountID:         "acct1",
+		MessageIDHeader:   "<receipt-001@example.com>",
+		Subject:           "Your receipt",
+		Sender:            "no-reply@shop.com",
+		SentAt:            now.Add(-72 * time.Hour),
+		Status:            "executed",
+		DestinationFolder: "Folders/AI-Triage/Receipts",
+		Reason:            "matched classify rule",
+		Confidence:        0.9,
+		EvaluatedAt:       now,
+		ActedAt:           &now,
+	}); err != nil {
+		t.Fatalf("save existing verdict: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       7,
+		MessageID: "<receipt-001@example.com>",
+		Subject:   "Your receipt",
+		Sender:    "no-reply@shop.com",
+		Date:      now.Add(-72 * time.Hour),
+		Folder:    "Folders/AI-Triage/Receipts",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Receipts": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	if err := s.DetectManualClassifications(client, "acct1"); err != nil {
+		t.Fatalf("DetectManualClassifications: %v", err)
+	}
+
+	// No training examples should have been added.
+	examples, err := database.GetTrainingExamples(cat.ID)
+	if err != nil {
+		t.Fatalf("get training examples: %v", err)
+	}
+	if len(examples) != 0 {
+		t.Errorf("expected 0 training examples for already-verdicted message, got %d", len(examples))
+	}
+
+	// Activity log should be empty.
+	actLog, err := database.GetActivityLog(10)
+	if err != nil {
+		t.Fatalf("get activity log: %v", err)
+	}
+	if len(actLog) != 0 {
+		t.Errorf("expected 0 activity entries, got %d", len(actLog))
 	}
 }

@@ -21,6 +21,7 @@ type MailClient interface {
 	MoveMessage(folder string, uid uint32, dest string) error
 	EnsureFolder(name string) error
 	GetMessageIDsInFolder(folder string) ([]string, error)
+	GetMessagesInFolder(folder string) ([]imappkg.FetchedMessage, error)
 	FetchBody(folder string, uid uint32) (string, error)
 	Close() error
 }

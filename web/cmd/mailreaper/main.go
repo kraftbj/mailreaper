@@ -150,6 +150,10 @@ func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config)
 			log.Printf("scan: DetectFeedback for %q: %v", acct.Name, err)
 		}
 
+		if err := scan.DetectManualClassifications(client, acct.Username); err != nil {
+			log.Printf("scan: DetectManualClassifications for %q: %v", acct.Name, err)
+		}
+
 		if err := client.Close(); err != nil {
 			log.Printf("scan: close connection for %q: %v", acct.Name, err)
 		}

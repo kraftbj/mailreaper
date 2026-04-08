@@ -287,6 +287,63 @@ func (c *Client) GetMessageIDsInFolder(folder string) ([]string, error) {
 	return ids, nil
 }
 
+// GetMessagesInFolder returns all messages in the named folder, including
+// envelope data (subject, sender, date). No age filter or limit is applied.
+func (c *Client) GetMessagesInFolder(folder string) ([]FetchedMessage, error) {
+	if _, err := c.client.Select(folder, nil).Wait(); err != nil {
+		return nil, fmt.Errorf("imap: select %q: %w", folder, err)
+	}
+
+	criteria := &imaplib.SearchCriteria{}
+	searchData, err := c.client.Search(criteria, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("imap: search in %q: %w", folder, err)
+	}
+
+	seqNums, ok := searchData.All.(imaplib.SeqSet)
+	if !ok || len(seqNums) == 0 {
+		return nil, nil
+	}
+
+	fetchOpts := &imaplib.FetchOptions{
+		Envelope: true,
+		UID:      true,
+	}
+
+	msgs, err := c.client.Fetch(seqNums, fetchOpts).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("imap: fetch envelopes in %q: %w", folder, err)
+	}
+
+	results := make([]FetchedMessage, 0, len(msgs))
+	for _, buf := range msgs {
+		if buf.Envelope == nil || buf.Envelope.MessageID == "" {
+			continue
+		}
+
+		sender := ""
+		if len(buf.Envelope.From) > 0 {
+			addr := buf.Envelope.From[0]
+			if addr.Name != "" {
+				sender = fmt.Sprintf("%s <%s>", addr.Name, addr.Addr())
+			} else {
+				sender = addr.Addr()
+			}
+		}
+
+		results = append(results, FetchedMessage{
+			UID:       uint32(buf.UID),
+			MessageID: buf.Envelope.MessageID,
+			Subject:   buf.Envelope.Subject,
+			Sender:    sender,
+			Date:      buf.Envelope.Date,
+			Folder:    folder,
+		})
+	}
+
+	return results, nil
+}
+
 // SanitizeFolderName trims leading and trailing whitespace from a folder name.
 func SanitizeFolderName(name string) string {
 	return strings.TrimSpace(name)
