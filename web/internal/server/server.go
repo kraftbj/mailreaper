@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -30,10 +31,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// Start begins listening on the configured port.
-func (s *Server) Start() error {
+// Start begins listening on the configured port. It blocks until the context
+// is cancelled, then gracefully shuts down the server.
+func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.port)
-	return http.ListenAndServe(addr, s.mux)
+	httpSrv := &http.Server{Addr: addr, Handler: s.mux}
+
+	go func() {
+		<-ctx.Done()
+		httpSrv.Shutdown(context.Background())
+	}()
+
+	err := httpSrv.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
 // registerRoutes wires all API endpoints to their handlers.

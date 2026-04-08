@@ -94,13 +94,14 @@ func main() {
 		}
 	}()
 
-	// Start web server (blocks).
+	// Start web server (blocks until context cancelled).
 	srv := server.NewServer(database, cfg.Server.Port)
 	log.Printf("starting web server on :%d", cfg.Server.Port)
-	if err := srv.Start(); err != nil {
+	if err := srv.Start(ctx); err != nil {
 		log.Printf("web server error: %v", err)
 		os.Exit(1)
 	}
+	log.Println("shutdown complete")
 }
 
 // runFullScan connects to each configured IMAP account, runs ScanAccount and
