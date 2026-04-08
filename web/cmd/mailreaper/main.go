@@ -20,6 +20,7 @@ import (
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dbPath := flag.String("db", "mailreaper.db", "path to SQLite database file")
+	catchup := flag.Bool("catchup", false, "scan all messages on first run (not just last 7 days)")
 	flag.Parse()
 
 	// Load config.
@@ -63,11 +64,17 @@ func main() {
 	}()
 
 	scan := scanner.New(database, cfg)
+	if *catchup {
+		log.Println("catchup mode: first scan will process all messages")
+		scan.LookbackDays = 0
+	}
 
 	// Start scan loop goroutine — runs immediately, then on interval.
 	go func() {
 		interval := time.Duration(cfg.Scan.IntervalMinutes) * time.Minute
 		runFullScan(ctx, scan, cfg)
+		// After first scan, revert to normal 7-day lookback
+		scan.LookbackDays = 7
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

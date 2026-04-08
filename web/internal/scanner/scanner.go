@@ -27,13 +27,14 @@ type MailClient interface {
 
 // Scanner orchestrates mail scanning across folders and accounts.
 type Scanner struct {
-	db  *db.DB
-	cfg *config.Config
+	db           *db.DB
+	cfg          *config.Config
+	LookbackDays int // 0 = scan all messages
 }
 
 // New creates a new Scanner.
 func New(database *db.DB, cfg *config.Config) *Scanner {
-	return &Scanner{db: database, cfg: cfg}
+	return &Scanner{db: database, cfg: cfg, LookbackDays: 7}
 }
 
 // ScanAccount scans the given folders for an account, evaluating each message
@@ -44,9 +45,17 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 		return fmt.Errorf("scanner: get enabled rules: %w", err)
 	}
 
-	since := time.Now().Add(-7 * 24 * time.Hour)
+	var since time.Time
+	if s.LookbackDays > 0 {
+		since = time.Now().Add(-time.Duration(s.LookbackDays) * 24 * time.Hour)
+	} else {
+		since = time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
 	minAge := time.Duration(s.cfg.Scan.MinMessageAgeMin) * time.Minute
 	maxMessages := s.cfg.Scan.MaxMessagesPerScan
+	if s.LookbackDays == 0 {
+		maxMessages = 0 // no limit during catchup
+	}
 
 	totalProcessed := 0
 
