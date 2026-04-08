@@ -2,3 +2,5 @@
 .DS_Store
 .superpowers/
 web/mailreaper
+web/mailreaper.db
+web/config.yaml
