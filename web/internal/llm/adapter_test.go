@@ -1,0 +1,116 @@
+package llm
+
+import (
+	"testing"
+)
+
+func TestParseJSONResponse_Standard(t *testing.T) {
+	input := `{"isTimeSensitive": true, "expiresAt": "2024-01-15T00:00:00Z", "reason": "sale ended", "confidence": 0.9}`
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsTimeSensitive {
+		t.Error("expected IsTimeSensitive true")
+	}
+	if resp.ExpiresAt != "2024-01-15T00:00:00Z" {
+		t.Errorf("unexpected ExpiresAt: %q", resp.ExpiresAt)
+	}
+	if resp.Reason != "sale ended" {
+		t.Errorf("unexpected Reason: %q", resp.Reason)
+	}
+	if resp.Confidence != 0.9 {
+		t.Errorf("unexpected Confidence: %v", resp.Confidence)
+	}
+}
+
+func TestParseJSONResponse_SnakeCaseKeys(t *testing.T) {
+	input := `{"is_time_sensitive": true, "expires_at": "2024-03-01T12:00:00Z", "explanation": "event passed", "score": 0.75}`
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsTimeSensitive {
+		t.Error("expected IsTimeSensitive true from is_time_sensitive")
+	}
+	if resp.ExpiresAt != "2024-03-01T12:00:00Z" {
+		t.Errorf("unexpected ExpiresAt: %q", resp.ExpiresAt)
+	}
+	if resp.Reason != "event passed" {
+		t.Errorf("unexpected Reason from explanation: %q", resp.Reason)
+	}
+	if resp.Confidence != 0.75 {
+		t.Errorf("unexpected Confidence from score: %v", resp.Confidence)
+	}
+}
+
+func TestParseJSONResponse_MarkdownFences(t *testing.T) {
+	input := "```json\n{\"isTimeSensitive\": false, \"expiresAt\": null, \"reason\": \"newsletter\", \"confidence\": 0.95}\n```"
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.IsTimeSensitive {
+		t.Error("expected IsTimeSensitive false")
+	}
+	if resp.Reason != "newsletter" {
+		t.Errorf("unexpected Reason: %q", resp.Reason)
+	}
+}
+
+func TestParseJSONResponse_MarkdownFencesNoLang(t *testing.T) {
+	input := "```\n{\"isTimeSensitive\": true, \"expiresAt\": \"2024-06-01T00:00:00Z\", \"reason\": \"event\", \"confidence\": 0.8}\n```"
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.IsTimeSensitive {
+		t.Error("expected IsTimeSensitive true")
+	}
+}
+
+func TestParseJSONResponse_ClassificationResponse(t *testing.T) {
+	input := `{"matches": true, "reason": "order confirmation", "confidence": 0.88}`
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Matches {
+		t.Error("expected Matches true")
+	}
+	if resp.Reason != "order confirmation" {
+		t.Errorf("unexpected Reason: %q", resp.Reason)
+	}
+	if resp.Confidence != 0.88 {
+		t.Errorf("unexpected Confidence: %v", resp.Confidence)
+	}
+}
+
+func TestParseJSONResponse_ConfidenceClampHigh(t *testing.T) {
+	input := `{"isTimeSensitive": true, "expiresAt": null, "reason": "oops", "confidence": 1.5}`
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Confidence != 1.0 {
+		t.Errorf("expected confidence clamped to 1.0, got %v", resp.Confidence)
+	}
+}
+
+func TestParseJSONResponse_ConfidenceClampLow(t *testing.T) {
+	input := `{"isTimeSensitive": false, "expiresAt": null, "reason": "safe", "confidence": -0.3}`
+	resp, err := ParseJSONResponse(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Confidence != 0.0 {
+		t.Errorf("expected confidence clamped to 0.0, got %v", resp.Confidence)
+	}
+}
+
+func TestParseJSONResponse_InvalidJSON(t *testing.T) {
+	_, err := ParseJSONResponse("not json at all")
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
