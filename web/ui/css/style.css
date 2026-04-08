@@ -423,6 +423,15 @@ a:hover {
   border-color: var(--text-muted);
 }
 
+.btn-accent {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-accent:hover { opacity: 0.85; }
+.btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Tables */
 .table-wrap {
   overflow-x: auto;

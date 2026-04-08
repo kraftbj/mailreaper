@@ -253,3 +253,12 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		"correctedToday":  correctedToday,
 	})
 }
+
+func (s *Server) handleScanNow(w http.ResponseWriter, r *http.Request) {
+	if s.OnScanRequested == nil {
+		jsonError(w, "scan not configured", http.StatusServiceUnavailable)
+		return
+	}
+	go s.OnScanRequested()
+	jsonResponse(w, map[string]string{"status": "scan started"})
+}

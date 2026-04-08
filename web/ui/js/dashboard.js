@@ -112,6 +112,22 @@ function renderReviewQueue(verdicts) {
     (verdicts.length > 5 ? `<div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;"><a href="/review.html">View all ${verdicts.length} →</a></div>` : "");
 }
 
+window.scanNow = async function() {
+  const btn = document.getElementById("scan-now-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Scanning..."; }
+  try {
+    await api("/api/scan", { method: "POST" });
+    // Wait a few seconds for scan to run, then refresh
+    setTimeout(async () => {
+      await loadDashboard();
+      if (btn) { btn.disabled = false; btn.textContent = "Scan Now"; }
+    }, 5000);
+  } catch (err) {
+    console.error("Scan failed:", err);
+    if (btn) { btn.disabled = false; btn.textContent = "Scan Now"; }
+  }
+};
+
 window.approveVerdict = async function(msgId) {
   await updateVerdict(msgId, "approved");
 };
