@@ -1,0 +1,45 @@
+accounts:
+  - name: Personal
+    host: imap.example.com
+    port: 993
+    username: user@example.com
+    # Supports ${ENV_VAR} substitution for secrets
+    password: ${IMAP_PASSWORD}
+    tls: true
+    folders:
+      scan:
+        - INBOX
+        - Newsletters
+        - Promotions
+
+  - name: Work
+    host: mail.work.example.com
+    port: 993
+    username: user@work.example.com
+    password: ${WORK_IMAP_PASSWORD}
+    tls: true
+    folders:
+      scan:
+        - INBOX
+
+llm:
+  # provider: gemini | ollama
+  provider: gemini
+  gemini:
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-2.0-flash
+  ollama:
+    endpoint: http://localhost:11434
+    model: llama3
+
+scan:
+  # How often to scan, in minutes (default: 30)
+  interval_minutes: 30
+  # Minimum message age before evaluating, in minutes (default: 60)
+  min_message_age_min: 60
+  # Maximum messages to process per scan cycle (default: 100)
+  max_messages_per_scan: 100
+
+server:
+  # Port for the web UI and API (default: 8025)
+  port: 8025
