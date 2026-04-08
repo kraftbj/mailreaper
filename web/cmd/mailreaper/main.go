@@ -1,23 +1,148 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/kraftbj/mailreaper/internal/config"
+	"github.com/kraftbj/mailreaper/internal/db"
+	imappkg "github.com/kraftbj/mailreaper/internal/imap"
+	"github.com/kraftbj/mailreaper/internal/rules"
+	"github.com/kraftbj/mailreaper/internal/scanner"
+	"github.com/kraftbj/mailreaper/internal/server"
 )
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	dbPath := flag.String("db", "mailreaper.db", "path to SQLite database file")
 	flag.Parse()
 
+	// Load config.
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Printf("error loading config from %q: %v", *configPath, err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("mailreaper: loaded config with %d account(s)\n", len(cfg.Accounts))
+	// Open database.
+	database, err := db.Open(*dbPath)
+	if err != nil {
+		log.Printf("error opening database %q: %v", *dbPath, err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	// Seed default rules.
+	if err := database.SeedDefaults(rules.DefaultRules); err != nil {
+		log.Printf("error seeding default rules: %v", err)
+		os.Exit(1)
+	}
+
+	// Upsert each configured account.
+	for _, acct := range cfg.Accounts {
+		if err := database.UpsertAccount(acct.Username, acct.Name); err != nil {
+			log.Printf("error upserting account %q: %v", acct.Username, err)
+		}
+	}
+
+	// Set up signal handling with context cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("received signal %v, shutting down", sig)
+		cancel()
+	}()
+
+	scan := scanner.New(database, cfg)
+
+	// Start scan loop goroutine — runs immediately, then on interval.
+	go func() {
+		interval := time.Duration(cfg.Scan.IntervalMinutes) * time.Minute
+		runFullScan(ctx, scan, cfg)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runFullScan(ctx, scan, cfg)
+			}
+		}
+	}()
+
+	// Start grace cleanup loop goroutine (every 6 hours).
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				log.Printf("grace cleanup: running (not yet implemented)")
+			}
+		}
+	}()
+
+	// Start web server (blocks).
+	srv := server.NewServer(database, cfg.Server.Port)
+	log.Printf("starting web server on :%d", cfg.Server.Port)
+	if err := srv.Start(); err != nil {
+		log.Printf("web server error: %v", err)
+		os.Exit(1)
+	}
+}
+
+// runFullScan connects to each configured IMAP account, runs ScanAccount and
+// DetectFeedback, then closes the connection.
+func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config) {
+	log.Printf("scan: starting full scan across %d account(s)", len(cfg.Accounts))
+
+	for _, acct := range cfg.Accounts {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		client, err := imappkg.Connect(acct)
+		if err != nil {
+			log.Printf("scan: connect to account %q: %v", acct.Name, err)
+			continue
+		}
+
+		folders := acct.Folders.Scan
+		if len(folders) == 0 {
+			folders = []string{"INBOX"}
+		}
+
+		if err := scan.ScanAccount(ctx, client, acct.Username, folders); err != nil {
+			log.Printf("scan: ScanAccount for %q: %v", acct.Name, err)
+		}
+
+		inbox := "INBOX"
+		if len(folders) > 0 {
+			inbox = folders[0]
+		}
+
+		if err := scan.DetectFeedback(client, acct.Username, inbox); err != nil {
+			log.Printf("scan: DetectFeedback for %q: %v", acct.Name, err)
+		}
+
+		if err := client.Close(); err != nil {
+			log.Printf("scan: close connection for %q: %v", acct.Name, err)
+		}
+	}
+
+	log.Printf("scan: full scan complete")
 }
