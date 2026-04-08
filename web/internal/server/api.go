@@ -240,7 +240,7 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		switch e.Type {
-		case "move":
+		case "expired", "moved", "classified":
 			movedToday++
 		case "corrected":
 			correctedToday++
