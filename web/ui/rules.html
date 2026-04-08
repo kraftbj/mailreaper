@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MailReaper — Rules</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="topnav-logo">MailReaper</span>
+  <div class="topnav-links">
+    <a href="/index.html">Dashboard</a>
+    <a href="/review.html">Review Queue</a>
+    <a href="/rules.html" class="active">Rules</a>
+    <a href="/settings.html">Settings</a>
+  </div>
+  <div class="topnav-status">
+    <span class="status-dot ok"></span>
+    <span>Connected</span>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="flex items-center justify-between mb-24">
+    <h1 class="page-title" style="margin-bottom:0">Rules</h1>
+    <button class="btn btn-primary" id="new-rule-btn">+ New Rule</button>
+  </div>
+
+  <div class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Priority</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Destination</th>
+            <th>Enabled</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rules-tbody">
+          <tr><td colspan="6" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<!-- New Rule Modal -->
+<div id="rule-modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">New Rule</div>
+    <input type="hidden" id="rule-id">
+
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input type="text" id="rule-name" class="form-control" placeholder="My rule">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Priority <span class="text-muted">(lower = higher priority)</span></label>
+      <input type="number" id="rule-priority" class="form-control" value="50" min="1">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Sender Patterns <span class="text-muted">(one per line, glob)</span></label>
+      <textarea id="rule-sender-patterns" class="form-control" rows="3" placeholder="*@example.com"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Subject Patterns <span class="text-muted">(one per line, glob)</span></label>
+      <textarea id="rule-subject-patterns" class="form-control" rows="3" placeholder="*sale*"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Type</label>
+      <select id="rule-type" class="form-control">
+        <option value="ttl">TTL (fixed hours)</option>
+        <option value="header">Expires Header</option>
+        <option value="content-regex">Content Regex</option>
+        <option value="classify">Classify (move to folder)</option>
+        <option value="llm">LLM (expiry detection)</option>
+        <option value="llm-classify">LLM (classification)</option>
+      </select>
+    </div>
+
+    <div id="ttl-hours-group" class="form-group">
+      <label class="form-label">Expiry Hours</label>
+      <input type="number" id="rule-hours" class="form-control" value="24" min="1">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Destination Folder <span class="text-muted">(blank = Expired)</span></label>
+      <input type="text" id="rule-destination" class="form-control" placeholder="Expired">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Grace Period (days)</label>
+      <input type="number" id="rule-grace" class="form-control" value="3" min="0">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="modal-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="modal-save-btn">Save Rule</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/js/app.js"></script>
+<script type="module" src="/js/rules.js"></script>
+</body>
+</html>

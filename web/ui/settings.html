@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MailReaper — Settings</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="topnav-logo">MailReaper</span>
+  <div class="topnav-links">
+    <a href="/index.html">Dashboard</a>
+    <a href="/review.html">Review Queue</a>
+    <a href="/rules.html">Rules</a>
+    <a href="/settings.html" class="active">Settings</a>
+  </div>
+  <div class="topnav-status">
+    <span class="status-dot ok"></span>
+    <span>Connected</span>
+  </div>
+</nav>
+
+<main class="container">
+  <h1 class="page-title">Settings</h1>
+
+  <!-- Categories -->
+  <div class="panel mb-24">
+    <div class="panel-header">
+      <span class="panel-title">Triage Categories</span>
+      <button class="btn btn-sm btn-primary" id="add-category-btn">+ Add Category</button>
+    </div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Icon</th>
+              <th>Name</th>
+              <th>Folder</th>
+              <th>Color</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="categories-tbody">
+            <tr><td colspan="5" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Training Examples -->
+  <div class="panel mb-24">
+    <div class="panel-header">
+      <span class="panel-title">Training Examples</span>
+      <div class="flex gap-8 items-center">
+        <select id="training-category-filter" class="form-control" style="width:auto">
+          <option value="">All categories</option>
+          <option value="expiry">expiry</option>
+          <option value="receipt">receipt</option>
+        </select>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Subject</th>
+              <th>Sender</th>
+              <th>Label</th>
+              <th>Source</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="training-tbody">
+            <tr><td colspan="6" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config info (read-only) -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Configuration (read-only)</span>
+    </div>
+    <div class="panel-body" style="padding:16px">
+      <p class="text-muted" style="font-size:13px;margin-bottom:12px">
+        LLM provider and scan settings are configured via <code>config.yaml</code> and cannot be changed from the dashboard.
+      </p>
+      <div id="accounts-section">
+        <div class="section-title">Accounts</div>
+        <div id="accounts-list" class="text-muted" style="font-size:13px">Loading…</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Add Category Modal -->
+<div id="category-modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-title" id="cat-modal-title">Add Category</div>
+    <input type="hidden" id="cat-id">
+
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input type="text" id="cat-name" class="form-control" placeholder="Paper-Trail">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Folder Name</label>
+      <input type="text" id="cat-folder" class="form-control" placeholder="Paper-Trail">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Icon (emoji)</label>
+      <input type="text" id="cat-icon" class="form-control" placeholder="📄" maxlength="4">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Color</label>
+      <input type="text" id="cat-color" class="form-control" placeholder="#9b59b6">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="cat-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="cat-save-btn">Save</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/js/app.js"></script>
+<script type="module" src="/js/settings.js"></script>
+</body>
+</html>

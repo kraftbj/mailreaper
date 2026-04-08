@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MailReaper — Review Queue</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="topnav-logo">MailReaper</span>
+  <div class="topnav-links">
+    <a href="/index.html">Dashboard</a>
+    <a href="/review.html" class="active">Review Queue</a>
+    <a href="/rules.html">Rules</a>
+    <a href="/settings.html">Settings</a>
+  </div>
+  <div class="topnav-status">
+    <span class="status-dot ok" id="status-dot"></span>
+    <span id="status-label">Connected</span>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="flex items-center justify-between mb-24">
+    <h1 class="page-title" style="margin-bottom:0">Review Queue</h1>
+    <div class="flex gap-8 items-center">
+      <label class="form-label" style="margin:0;white-space:nowrap">Batch approve above</label>
+      <input type="number" id="threshold-input" class="form-control" style="width:72px"
+             min="0" max="100" value="90" title="Confidence threshold (%)">
+      <span class="text-muted">%</span>
+      <button class="btn btn-primary" id="batch-approve-btn">Approve</button>
+    </div>
+  </div>
+
+  <div class="flex gap-8 mb-16">
+    <select id="sort-select" class="form-control" style="width:auto">
+      <option value="confidence-desc">Sort: Confidence ↓</option>
+      <option value="confidence-asc">Sort: Confidence ↑</option>
+      <option value="date-desc">Sort: Newest first</option>
+      <option value="date-asc">Sort: Oldest first</option>
+    </select>
+  </div>
+
+  <div class="panel">
+    <div class="table-wrap">
+      <table id="verdict-table">
+        <thead>
+          <tr>
+            <th>Subject</th>
+            <th>Sender</th>
+            <th>Date</th>
+            <th>Reason</th>
+            <th>Confidence</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="verdict-tbody">
+          <tr><td colspan="6" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script type="module" src="/js/app.js"></script>
+<script type="module" src="/js/review.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MailReaper — Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <span class="topnav-logo">MailReaper</span>
+  <div class="topnav-links">
+    <a href="/index.html" class="active">Dashboard</a>
+    <a href="/review.html">Review Queue</a>
+    <a href="/rules.html">Rules</a>
+    <a href="/settings.html">Settings</a>
+  </div>
+  <div class="topnav-status">
+    <span class="status-dot ok" id="status-dot"></span>
+    <span id="status-label">Connected</span>
+  </div>
+</nav>
+
+<main class="container">
+  <h1 class="page-title">Dashboard</h1>
+
+  <!-- Stats row -->
+  <div id="stats-row" class="stat-row">
+    <div class="stat-card"><div class="label">Triaged Today</div><div class="value">—</div></div>
+    <div class="stat-card"><div class="label">Awaiting Review</div><div class="value">—</div></div>
+    <div class="stat-card"><div class="label">Corrections</div><div class="value">—</div></div>
+  </div>
+
+  <!-- Triage destinations -->
+  <div class="section-title">Triage Destinations</div>
+  <div id="triage-grid" class="triage-grid">
+    <div class="text-muted" style="font-size:13px;">Loading…</div>
+  </div>
+
+  <!-- Two-column layout -->
+  <div class="two-col">
+
+    <!-- Recent Activity -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Recent Activity</span>
+      </div>
+      <div class="panel-body" id="activity-list">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Review Queue -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Review Queue <span id="review-count" class="verdict-confidence"></span></span>
+        <a href="/review.html" class="btn btn-sm btn-outline">View All</a>
+      </div>
+      <div class="panel-body" id="review-queue">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script type="module" src="/js/dashboard.js"></script>
+</body>
+</html>
