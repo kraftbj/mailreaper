@@ -1,2 +1,4 @@
 *.xpi
 .DS_Store
+.superpowers/
+web/mailreaper
