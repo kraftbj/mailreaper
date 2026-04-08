@@ -167,14 +167,14 @@ func (c *Client) FetchBody(folder string, uid uint32) (string, error) {
 		return "", fmt.Errorf("imap: select %q: %w", folder, err)
 	}
 
-	seqNums := imaplib.SeqSetNum(uid)
+	uidSet := imaplib.UIDSetNum(imaplib.UID(uid))
 	fetchOpts := &imaplib.FetchOptions{
 		BodySection: []*imaplib.FetchItemBodySection{
 			{Peek: true},
 		},
 	}
 
-	msgs, err := c.client.Fetch(seqNums, fetchOpts).Collect()
+	msgs, err := c.client.Fetch(uidSet, fetchOpts).Collect()
 	if err != nil {
 		return "", fmt.Errorf("imap: fetch body uid=%d in %q: %w", uid, folder, err)
 	}
@@ -190,40 +190,40 @@ func (c *Client) FetchBody(folder string, uid uint32) (string, error) {
 	return "", nil
 }
 
-// MoveMessage selects folder, then moves the message with the given sequence
-// number to destFolder.
-func (c *Client) MoveMessage(folder string, seqNum uint32, destFolder string) error {
+// MoveMessage selects folder, then moves the message with the given UID
+// to destFolder.
+func (c *Client) MoveMessage(folder string, uid uint32, destFolder string) error {
 	if _, err := c.client.Select(folder, nil).Wait(); err != nil {
 		return fmt.Errorf("imap: select %q: %w", folder, err)
 	}
 
-	numSet := imaplib.SeqSetNum(seqNum)
-	if _, err := c.client.Move(numSet, destFolder).Wait(); err != nil {
-		return fmt.Errorf("imap: move seq=%d from %q to %q: %w", seqNum, folder, destFolder, err)
+	uidSet := imaplib.UIDSetNum(imaplib.UID(uid))
+	if _, err := c.client.Move(uidSet, destFolder).Wait(); err != nil {
+		return fmt.Errorf("imap: move uid=%d from %q to %q: %w", uid, folder, destFolder, err)
 	}
 	return nil
 }
 
-// DeleteMessage selects folder, flags the message with the given sequence
-// number as \Deleted, and optionally expunges it immediately.
-func (c *Client) DeleteMessage(folder string, seqNum uint32, permanent bool) error {
+// DeleteMessage selects folder, flags the message with the given UID
+// as \Deleted, and optionally expunges it immediately.
+func (c *Client) DeleteMessage(folder string, uid uint32, permanent bool) error {
 	if _, err := c.client.Select(folder, nil).Wait(); err != nil {
 		return fmt.Errorf("imap: select %q: %w", folder, err)
 	}
 
-	numSet := imaplib.SeqSetNum(seqNum)
-	storeCmd := c.client.Store(numSet, &imaplib.StoreFlags{
+	uidSet := imaplib.UIDSetNum(imaplib.UID(uid))
+	storeCmd := c.client.Store(uidSet, &imaplib.StoreFlags{
 		Op:     imaplib.StoreFlagsAdd,
 		Silent: true,
 		Flags:  []imaplib.Flag{imaplib.FlagDeleted},
 	}, nil)
 	if err := storeCmd.Close(); err != nil {
-		return fmt.Errorf("imap: flag deleted seq=%d in %q: %w", seqNum, folder, err)
+		return fmt.Errorf("imap: flag deleted uid=%d in %q: %w", uid, folder, err)
 	}
 
 	if permanent {
 		if err := c.client.Expunge().Close(); err != nil {
-			return fmt.Errorf("imap: expunge seq=%d in %q: %w", seqNum, folder, err)
+			return fmt.Errorf("imap: expunge uid=%d in %q: %w", uid, folder, err)
 		}
 	}
 	return nil
