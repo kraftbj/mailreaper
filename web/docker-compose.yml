@@ -1,0 +1,12 @@
+services:
+  mailreaper:
+    build: .
+    ports:
+      - "8025:8025"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - mailreaper-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  mailreaper-data:
