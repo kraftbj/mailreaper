@@ -56,6 +56,8 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 			log.Printf("scanner: fetch messages from %q: %v", folder, err)
 			continue
 		}
+		log.Printf("scanner: %q returned %d messages (since=%s, minAge=%s, limit=%d)",
+			folder, len(msgs), since.Format("2006-01-02"), minAge, maxMessages)
 
 		for _, msg := range msgs {
 			select {
@@ -86,6 +88,8 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 			if verdict == nil {
 				continue
 			}
+			log.Printf("scanner: verdict for %q: rule=%q confidence=%.2f expired=%v classified=%v",
+				msg.Subject, verdict.Rule.Name, verdict.Confidence, verdict.Expired, verdict.Classified)
 
 			totalProcessed++
 

@@ -116,8 +116,8 @@ func (c *Client) FetchNewMessages(folder string, since time.Time, maxAge time.Du
 			continue
 		}
 
-		// Skip messages older than maxAge.
-		if maxAge > 0 && buf.Envelope.Date.Before(cutoff) {
+		// Skip messages newer than minAge (too fresh to evaluate).
+		if maxAge > 0 && buf.Envelope.Date.After(cutoff) {
 			continue
 		}
 
