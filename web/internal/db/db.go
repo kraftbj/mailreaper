@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -45,6 +46,32 @@ func Open(path string) (*DB, error) {
 // Close closes the underlying database connection.
 func (d *DB) Close() error {
 	return d.DB.Close()
+}
+
+// UpsertAccount inserts or updates an account record.
+func (d *DB) UpsertAccount(id, name string) error {
+	_, err := d.Exec(`
+		INSERT INTO accounts (id, name)
+		VALUES (?, ?)
+		ON CONFLICT(id) DO UPDATE SET name = excluded.name
+	`, id, name)
+	if err != nil {
+		return fmt.Errorf("db: upsert account: %w", err)
+	}
+	return nil
+}
+
+// UpdateAccountScan records the results of the latest scan for an account.
+func (d *DB) UpdateAccountScan(id string, messageCount int) error {
+	_, err := d.Exec(`
+		UPDATE accounts
+		SET last_scan_at = ?, last_scan_message_count = ?
+		WHERE id = ?
+	`, time.Now().UTC(), messageCount, id)
+	if err != nil {
+		return fmt.Errorf("db: update account scan: %w", err)
+	}
+	return nil
 }
 
 // migrate creates all tables if they do not already exist.
