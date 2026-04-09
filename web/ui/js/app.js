@@ -118,9 +118,11 @@ export function fmtConfidence(conf) {
 export function badgeClass(type) {
   const map = {
     expired: "badge-expired",
+    triaged: "badge-classify",
     corrected: "badge-corrected",
     pending: "badge-pending",
     classify: "badge-classify",
+    manual_classify: "badge-classify",
   };
   return map[type] || "badge-pending";
 }

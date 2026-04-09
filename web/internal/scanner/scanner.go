@@ -148,8 +148,13 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 					continue
 				}
 
+				activityType := "triaged"
+				if verdict.Expired {
+					activityType = "expired"
+				}
+
 				if err := s.db.LogActivity(db.ActivityEntry{
-					Type:            "expired",
+					Type:            activityType,
 					AccountID:       accountID,
 					MessageIDHeader: msg.MessageID,
 					Subject:         msg.Subject,
