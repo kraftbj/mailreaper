@@ -106,7 +106,7 @@ func (d *DB) SaveRule(r Rule) error {
 		return fmt.Errorf("db: marshal expiration config: %w", err)
 	}
 
-	now := time.Now().UTC()
+	nowStr := formatDBTime(time.Now().UTC())
 	_, err = d.Exec(`
 		INSERT INTO rules
 			(id, name, enabled, priority, builtin, match_config, expiration_config,
@@ -128,7 +128,7 @@ func (d *DB) SaveRule(r Rule) error {
 		r.ID, r.Name, r.Enabled, r.Priority, r.Builtin,
 		string(matchJSON), string(expirationJSON),
 		r.Action, r.DestinationFolder, r.NextRuleID, r.GracePeriodDays,
-		now, now,
+		nowStr, nowStr,
 	)
 	if err != nil {
 		return fmt.Errorf("db: save rule: %w", err)
@@ -158,7 +158,7 @@ func (d *DB) SeedDefaults(defaults []Rule) error {
 			return fmt.Errorf("db: seed defaults marshal expiration: %w", err)
 		}
 
-		now := time.Now().UTC()
+		nowStr := formatDBTime(time.Now().UTC())
 		_, err = d.Exec(`
 			INSERT OR IGNORE INTO rules
 				(id, name, enabled, priority, builtin, match_config, expiration_config,
@@ -168,7 +168,7 @@ func (d *DB) SeedDefaults(defaults []Rule) error {
 			r.ID, r.Name, r.Enabled, r.Priority, r.Builtin,
 			string(matchJSON), string(expirationJSON),
 			r.Action, r.DestinationFolder, r.NextRuleID, r.GracePeriodDays,
-			now, now,
+			nowStr, nowStr,
 		)
 		if err != nil {
 			return fmt.Errorf("db: seed defaults insert %q: %w", r.ID, err)

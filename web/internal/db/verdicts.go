@@ -46,9 +46,11 @@ func (d *DB) SaveVerdict(v Verdict) error {
 			evaluated_at       = excluded.evaluated_at,
 			acted_at           = excluded.acted_at
 	`,
-		v.AccountID, v.MessageIDHeader, v.Subject, v.Sender, v.SentAt, v.RuleID,
-		v.Status, v.DestinationFolder, v.ExpiresAt, v.Reason, v.Confidence,
-		v.EvaluatedAt, v.ActedAt,
+		v.AccountID, v.MessageIDHeader, v.Subject, v.Sender,
+		formatDBTime(v.SentAt), v.RuleID,
+		v.Status, v.DestinationFolder, formatDBNullTime(v.ExpiresAt),
+		v.Reason, v.Confidence, formatDBTime(v.EvaluatedAt),
+		formatDBNullTime(v.ActedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("db: save verdict: %w", err)
@@ -98,11 +100,10 @@ func (d *DB) GetPendingVerdicts() ([]Verdict, error) {
 // UpdateVerdictStatus sets the status of a verdict. For approved, rejected, or
 // corrected statuses, acted_at is also set to now.
 func (d *DB) UpdateVerdictStatus(messageIDHeader, status string) error {
-	var actedAt *time.Time
+	var actedAt any
 	switch status {
 	case "approved", "rejected", "corrected":
-		now := time.Now().UTC()
-		actedAt = &now
+		actedAt = formatDBTime(time.Now().UTC())
 	}
 
 	_, err := d.Exec(`
@@ -114,6 +115,51 @@ func (d *DB) UpdateVerdictStatus(messageIDHeader, status string) error {
 		return fmt.Errorf("db: update verdict status: %w", err)
 	}
 	return nil
+}
+
+// ClearAllVerdicts removes all verdicts, forcing a full re-evaluation on next scan.
+func (d *DB) ClearAllVerdicts() (int64, error) {
+	result, err := d.Exec(`DELETE FROM verdicts`)
+	if err != nil {
+		return 0, fmt.Errorf("db: clear all verdicts: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// GetDeferredExpiries returns verdicts that have an expires_at in the past but
+// haven't been moved to the expired folder yet. These are messages that were
+// classified with a future expiry date that has now arrived.
+func (d *DB) GetDeferredExpiries() ([]Verdict, error) {
+	rows, err := d.Query(`
+		SELECT id, account_id, message_id_header, subject, sender, sent_at,
+		       rule_id, status, destination_folder, expires_at, reason,
+		       confidence, evaluated_at, acted_at
+		FROM verdicts
+		WHERE expires_at IS NOT NULL
+		  AND expires_at != ''
+		  AND status IN ('executed', 'manual')
+		  AND destination_folder NOT LIKE '%Expired%'
+		ORDER BY expires_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("db: get deferred expiries: %w", err)
+	}
+	defer rows.Close()
+
+	all, err := scanVerdicts(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only those whose expires_at is in the past.
+	now := time.Now()
+	var expired []Verdict
+	for _, v := range all {
+		if v.ExpiresAt != nil && now.After(*v.ExpiresAt) {
+			expired = append(expired, v)
+		}
+	}
+	return expired, nil
 }
 
 // GetExecutedMessageIDs returns all message_id_header values for verdicts
@@ -143,26 +189,32 @@ func (d *DB) GetExecutedMessageIDs(accountID string) ([]string, error) {
 func scanVerdict(row *sql.Row) (*Verdict, error) {
 	var v Verdict
 	var ruleID sql.NullString
-	var expiresAt sql.NullTime
-	var actedAt sql.NullTime
+	var sentAtStr, evaluatedAtStr string
+	var expiresAtStr, actedAtStr sql.NullString
 
 	err := row.Scan(
-		&v.ID, &v.AccountID, &v.MessageIDHeader, &v.Subject, &v.Sender, &v.SentAt,
-		&ruleID, &v.Status, &v.DestinationFolder, &expiresAt,
-		&v.Reason, &v.Confidence, &v.EvaluatedAt, &actedAt,
+		&v.ID, &v.AccountID, &v.MessageIDHeader, &v.Subject, &v.Sender, &sentAtStr,
+		&ruleID, &v.Status, &v.DestinationFolder, &expiresAtStr,
+		&v.Reason, &v.Confidence, &evaluatedAtStr, &actedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	if v.SentAt, err = parseDBTime(sentAtStr); err != nil {
+		return nil, fmt.Errorf("parse sent_at: %w", err)
+	}
+	if v.EvaluatedAt, err = parseDBTime(evaluatedAtStr); err != nil {
+		return nil, fmt.Errorf("parse evaluated_at: %w", err)
+	}
 	if ruleID.Valid {
 		v.RuleID = &ruleID.String
 	}
-	if expiresAt.Valid {
-		v.ExpiresAt = &expiresAt.Time
+	if v.ExpiresAt, err = parseDBNullTime(expiresAtStr); err != nil {
+		return nil, fmt.Errorf("parse expires_at: %w", err)
 	}
-	if actedAt.Valid {
-		v.ActedAt = &actedAt.Time
+	if v.ActedAt, err = parseDBNullTime(actedAtStr); err != nil {
+		return nil, fmt.Errorf("parse acted_at: %w", err)
 	}
 	return &v, nil
 }
@@ -172,25 +224,31 @@ func scanVerdicts(rows *sql.Rows) ([]Verdict, error) {
 	for rows.Next() {
 		var v Verdict
 		var ruleID sql.NullString
-		var expiresAt sql.NullTime
-		var actedAt sql.NullTime
+		var sentAtStr, evaluatedAtStr string
+		var expiresAtStr, actedAtStr sql.NullString
 
 		err := rows.Scan(
-			&v.ID, &v.AccountID, &v.MessageIDHeader, &v.Subject, &v.Sender, &v.SentAt,
-			&ruleID, &v.Status, &v.DestinationFolder, &expiresAt,
-			&v.Reason, &v.Confidence, &v.EvaluatedAt, &actedAt,
+			&v.ID, &v.AccountID, &v.MessageIDHeader, &v.Subject, &v.Sender, &sentAtStr,
+			&ruleID, &v.Status, &v.DestinationFolder, &expiresAtStr,
+			&v.Reason, &v.Confidence, &evaluatedAtStr, &actedAtStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("db: scan verdict: %w", err)
 		}
+		if v.SentAt, err = parseDBTime(sentAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse sent_at: %w", err)
+		}
+		if v.EvaluatedAt, err = parseDBTime(evaluatedAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse evaluated_at: %w", err)
+		}
 		if ruleID.Valid {
 			v.RuleID = &ruleID.String
 		}
-		if expiresAt.Valid {
-			v.ExpiresAt = &expiresAt.Time
+		if v.ExpiresAt, err = parseDBNullTime(expiresAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse expires_at: %w", err)
 		}
-		if actedAt.Valid {
-			v.ActedAt = &actedAt.Time
+		if v.ActedAt, err = parseDBNullTime(actedAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse acted_at: %w", err)
 		}
 		verdicts = append(verdicts, v)
 	}

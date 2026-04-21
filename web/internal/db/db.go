@@ -10,6 +10,61 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// timeLayouts lists the formats tried when parsing timestamps back from SQLite.
+// modernc.org/sqlite stores Go time.Time values as strings; the exact format
+// varies (UTC vs offset, nanoseconds vs not).
+var timeLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05.999999999 -0700 -0700", // modernc.org/sqlite time.Time output
+	"2006-01-02 15:04:05 -0700 -0700",
+	"2006-01-02 15:04:05.999999999 -0700 MST", // Go default time.String()
+	"2006-01-02 15:04:05 -0700 MST",
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05.999999999+00:00",
+	"2006-01-02 15:04:05+00:00",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// parseDBTime parses a time string stored by SQLite.
+func parseDBTime(s string) (time.Time, error) {
+	for _, layout := range timeLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("db: unrecognized time format: %q", s)
+}
+
+// parseDBNullTime parses an optional time string from SQLite.
+func parseDBNullTime(s sql.NullString) (*time.Time, error) {
+	if !s.Valid || s.String == "" {
+		return nil, nil
+	}
+	t, err := parseDBTime(s.String)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// formatDBTime formats a time.Time as RFC3339Nano for consistent SQLite storage.
+// Nanosecond precision ensures correct ordering for entries created in rapid succession.
+func formatDBTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// formatDBNullTime formats an optional time for SQLite storage.
+func formatDBNullTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return formatDBTime(*t)
+}
+
 // DB wraps a *sql.DB with MailReaper-specific helpers.
 type DB struct {
 	*sql.DB
@@ -67,7 +122,7 @@ func (d *DB) UpdateAccountScan(id string, messageCount int) error {
 		UPDATE accounts
 		SET last_scan_at = ?, last_scan_message_count = ?
 		WHERE id = ?
-	`, time.Now().UTC(), messageCount, id)
+	`, formatDBTime(time.Now().UTC()), messageCount, id)
 	if err != nil {
 		return fmt.Errorf("db: update account scan: %w", err)
 	}
@@ -155,6 +210,11 @@ func (d *DB) migrate() error {
 			icon         TEXT,
 			color        TEXT,
 			created_at   TIMESTAMP
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS declined_auto_rules (
+			id          TEXT PRIMARY KEY,
+			declined_at TIMESTAMP
 		)`,
 	}
 

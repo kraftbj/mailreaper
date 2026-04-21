@@ -142,30 +142,45 @@ func TestClearTrainingExamples(t *testing.T) {
 func TestAddTrainingExampleCap(t *testing.T) {
 	d := openTestDB(t)
 
-	// Insert 100 examples to reach the cap.
-	for i := 0; i < 100; i++ {
+	// Insert 50 examples to reach the per-category cap.
+	for i := 0; i < 50; i++ {
 		ex := makeTrainingExample("receipt", "old-subject")
 		if err := d.AddTrainingExample(ex); err != nil {
 			t.Fatalf("AddTrainingExample() error = %v at i=%d", err, i)
 		}
 	}
 
-	// Add one more — should evict the oldest.
+	// Add one more — should evict the oldest in that category.
 	if err := d.AddTrainingExample(makeTrainingExample("receipt", "new-subject")); err != nil {
 		t.Fatalf("AddTrainingExample() over cap error = %v", err)
 	}
 
-	examples, err := d.GetTrainingExamples("")
+	examples, err := d.GetTrainingExamples("receipt")
 	if err != nil {
 		t.Fatalf("GetTrainingExamples() error = %v", err)
 	}
-	if len(examples) != 100 {
-		t.Errorf("expected 100 examples after cap eviction, got %d", len(examples))
+	if len(examples) != 50 {
+		t.Errorf("expected 50 examples after cap eviction, got %d", len(examples))
 	}
 
 	// The newest should be present.
 	newest := examples[len(examples)-1]
 	if newest.Subject != "new-subject" {
 		t.Errorf("expected newest subject %q, got %q", "new-subject", newest.Subject)
+	}
+
+	// A different category should have its own independent cap.
+	for i := 0; i < 50; i++ {
+		if err := d.AddTrainingExample(makeTrainingExample("newsletter", "nl-subject")); err != nil {
+			t.Fatalf("AddTrainingExample(newsletter) error = %v at i=%d", err, i)
+		}
+	}
+
+	all, err := d.GetTrainingExamples("")
+	if err != nil {
+		t.Fatalf("GetTrainingExamples() error = %v", err)
+	}
+	if len(all) != 100 {
+		t.Errorf("expected 100 total examples (50 per category), got %d", len(all))
 	}
 }

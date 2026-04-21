@@ -30,7 +30,7 @@ func (d *DB) LogActivity(entry ActivityEntry) error {
 	`,
 		entry.Type, entry.AccountID, entry.MessageIDHeader, entry.Subject,
 		entry.Sender, entry.RuleName, entry.Destination, entry.Reason,
-		entry.Confidence, time.Now().UTC(),
+		entry.Confidence, formatDBTime(time.Now().UTC()),
 	)
 	if err != nil {
 		return fmt.Errorf("db: log activity: %w", err)
@@ -61,12 +61,16 @@ func (d *DB) GetActivityLog(limit int) ([]ActivityEntry, error) {
 	var entries []ActivityEntry
 	for sqlRows.Next() {
 		var e ActivityEntry
+		var createdAtStr string
 		if err := sqlRows.Scan(
 			&e.ID, &e.Type, &e.AccountID, &e.MessageIDHeader, &e.Subject,
 			&e.Sender, &e.RuleName, &e.Destination, &e.Reason,
-			&e.Confidence, &e.CreatedAt,
+			&e.Confidence, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("db: scan activity entry: %w", err)
+		}
+		if e.CreatedAt, err = parseDBTime(createdAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse activity created_at: %w", err)
 		}
 		entries = append(entries, e)
 	}

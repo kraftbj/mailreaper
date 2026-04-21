@@ -30,8 +30,12 @@ func (d *DB) GetCategories() ([]Category, error) {
 	var cats []Category
 	for rows.Next() {
 		var c Category
-		if err := rows.Scan(&c.ID, &c.Name, &c.FolderName, &c.Icon, &c.Color, &c.CreatedAt); err != nil {
+		var createdAtStr string
+		if err := rows.Scan(&c.ID, &c.Name, &c.FolderName, &c.Icon, &c.Color, &createdAtStr); err != nil {
 			return nil, fmt.Errorf("db: scan category: %w", err)
+		}
+		if c.CreatedAt, err = parseDBTime(createdAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse category created_at: %w", err)
 		}
 		cats = append(cats, c)
 	}
@@ -49,7 +53,7 @@ func (d *DB) SaveCategory(c Category) error {
 			folder_name = excluded.folder_name,
 			icon        = excluded.icon,
 			color       = excluded.color
-	`, c.ID, c.Name, c.FolderName, c.Icon, c.Color, now)
+	`, c.ID, c.Name, c.FolderName, c.Icon, c.Color, formatDBTime(now))
 	if err != nil {
 		return fmt.Errorf("db: save category: %w", err)
 	}

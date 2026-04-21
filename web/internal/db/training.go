@@ -17,23 +17,21 @@ type TrainingExample struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
-const maxTrainingExamples = 100
+const maxTrainingExamplesPerCategory = 50
 
 // AddTrainingExample inserts a new training example. If adding it would exceed
-// the 100-entry cap, the oldest entry in the same category is removed first.
+// the per-category cap, the oldest entry in that category is removed first.
 func (d *DB) AddTrainingExample(ex TrainingExample) error {
-	// Enforce per-table cap.
 	var count int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM training_examples`).Scan(&count); err != nil {
+	if err := d.QueryRow(`SELECT COUNT(*) FROM training_examples WHERE category = ?`, ex.Category).Scan(&count); err != nil {
 		return fmt.Errorf("db: count training examples: %w", err)
 	}
 
-	if count >= maxTrainingExamples {
-		// Remove the oldest entry.
+	if count >= maxTrainingExamplesPerCategory {
 		_, err := d.Exec(`
 			DELETE FROM training_examples
-			WHERE id = (SELECT id FROM training_examples ORDER BY created_at ASC LIMIT 1)
-		`)
+			WHERE id = (SELECT id FROM training_examples WHERE category = ? ORDER BY created_at ASC LIMIT 1)
+		`, ex.Category)
 		if err != nil {
 			return fmt.Errorf("db: trim training examples: %w", err)
 		}
@@ -44,7 +42,7 @@ func (d *DB) AddTrainingExample(ex TrainingExample) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`,
 		ex.Category, ex.Subject, ex.Sender, ex.BodySnippet,
-		ex.Label, ex.Source, time.Now().UTC(),
+		ex.Label, ex.Source, formatDBTime(time.Now().UTC()),
 	)
 	if err != nil {
 		return fmt.Errorf("db: add training example: %w", err)
@@ -78,11 +76,15 @@ func (d *DB) GetTrainingExamples(category string) ([]TrainingExample, error) {
 	var examples []TrainingExample
 	for rows.Next() {
 		var ex TrainingExample
+		var createdAtStr string
 		if err := rows.Scan(
 			&ex.ID, &ex.Category, &ex.Subject, &ex.Sender,
-			&ex.BodySnippet, &ex.Label, &ex.Source, &ex.CreatedAt,
+			&ex.BodySnippet, &ex.Label, &ex.Source, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("db: scan training example: %w", err)
+		}
+		if ex.CreatedAt, err = parseDBTime(createdAtStr); err != nil {
+			return nil, fmt.Errorf("db: parse training created_at: %w", err)
 		}
 		examples = append(examples, ex)
 	}

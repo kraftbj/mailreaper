@@ -38,19 +38,24 @@ func (cv *CachedVerdict) ttl() time.Duration {
 // Returns nil (no error) if there is no cached entry or if it has expired.
 func (d *DB) GetCachedVerdict(messageIDHeader string) (*CachedVerdict, error) {
 	var verdictJSON string
-	var cachedAt time.Time
+	var cachedAtStr string
 
 	err := d.QueryRow(`
 		SELECT verdict, cached_at
 		FROM llm_cache
 		WHERE message_id_header = ?
-	`, messageIDHeader).Scan(&verdictJSON, &cachedAt)
+	`, messageIDHeader).Scan(&verdictJSON, &cachedAtStr)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("db: get cached verdict: %w", err)
+	}
+
+	cachedAt, err := parseDBTime(cachedAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("db: parse cached_at: %w", err)
 	}
 
 	var cv CachedVerdict
@@ -80,7 +85,7 @@ func (d *DB) SetCachedVerdict(messageIDHeader string, cv CachedVerdict) error {
 		ON CONFLICT(message_id_header) DO UPDATE SET
 			verdict   = excluded.verdict,
 			cached_at = excluded.cached_at
-	`, messageIDHeader, string(verdictJSON), time.Now().UTC())
+	`, messageIDHeader, string(verdictJSON), formatDBTime(time.Now().UTC()))
 	if err != nil {
 		return fmt.Errorf("db: set cached verdict: %w", err)
 	}
