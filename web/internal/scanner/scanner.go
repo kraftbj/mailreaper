@@ -69,7 +69,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 		log.Printf("scanner: %q returned %d messages (since=%s, minAge=%s, limit=%d)",
 			folder, len(msgs), since.Format("2006-01-02"), minAge, maxMessages)
 
-		for _, msg := range msgs {
+		for i, msg := range msgs {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -90,6 +90,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				continue
 			}
 
+			log.Printf("scanner: [%d/%d] evaluating %q from %s", i+1, len(msgs), msg.Subject, msg.Sender)
 			verdict, err := s.evaluateMessage(ctx, client, &msg, enabledRules)
 			if err != nil {
 				log.Printf("scanner: evaluate message %q: %v", msg.MessageID, err)
@@ -184,15 +185,35 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 	return nil
 }
 
+// originalSenderHeaders lists headers checked (in priority order) for the real
+// sender behind forwarding/alias services like SimpleLogin.
+var originalSenderHeaders = []string{
+	"x-simplelogin-original-from",
+	"x-original-from",
+	"x-forwarded-from",
+}
+
+// extractOriginalSender returns the original sender from forwarding service
+// headers, or empty string if none found.
+func extractOriginalSender(headers map[string][]string) string {
+	for _, h := range originalSenderHeaders {
+		if vals, ok := headers[h]; ok && len(vals) > 0 && vals[0] != "" {
+			return vals[0]
+		}
+	}
+	return ""
+}
+
 // evaluateMessage runs a message against all enabled rules (sorted by priority)
 // and returns the first matching verdict, or nil if no rule matches.
 func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, enabledRules []db.Rule) (*rules.RuleVerdict, error) {
 	ruleMsg := &rules.Message{
-		Author:    msg.Sender,
-		Subject:   msg.Subject,
-		Date:      msg.Date,
-		Folder:    msg.Folder,
-		MessageID: msg.MessageID,
+		Author:         msg.Sender,
+		OriginalSender: extractOriginalSender(msg.Headers),
+		Subject:        msg.Subject,
+		Date:           msg.Date,
+		Folder:         msg.Folder,
+		MessageID:      msg.MessageID,
 	}
 
 	var bodyCache *string // lazily fetched
@@ -211,6 +232,24 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 		bodyCache = &body
 		return body
 	}
+
+	// Collect llm-classify rules that match this message so we can batch them
+	// into a single LLM call instead of N separate calls.
+	var classifyRules []db.Rule
+	classifyRulesByCategory := map[string]db.Rule{}
+	for _, rule := range enabledRules {
+		if rule.ExpirationConfig.Type == "llm-classify" && rules.MatchesRule(ruleMsg, rule) {
+			cat := rule.ExpirationConfig.Category
+			if cat != "" {
+				classifyRules = append(classifyRules, rule)
+				classifyRulesByCategory[cat] = rule
+			}
+		}
+	}
+
+	// multiClassifyDone tracks whether we've already run the batch classify.
+	var multiClassifyDone bool
+	var multiClassifyResult *llm.LLMResponse
 
 	for _, rule := range enabledRules {
 		if !rules.MatchesRule(ruleMsg, rule) {
@@ -254,6 +293,61 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 			if strings.ToLower(s.cfg.LLM.Provider) == "none" {
 				continue
 			}
+
+			// Batch: on the first llm-classify rule, run one multi-classify
+			// call for ALL llm-classify categories at once.
+			if !multiClassifyDone && len(classifyRules) > 1 {
+				multiClassifyDone = true
+				result, err := s.evaluateMultiClassify(ctx, client, msg, classifyRules)
+				if err != nil {
+					log.Printf("scanner: multi-classify for %q: %v", msg.MessageID, err)
+				} else {
+					multiClassifyResult = result
+				}
+			}
+
+			// If we did a batch call, check its result.
+			if multiClassifyResult != nil {
+				// If the LLM detected expiry, prefer that over classification.
+				if multiClassifyResult.IsTimeSensitive && multiClassifyResult.ExpiresAt != "" {
+					expiresAt, expired := parseExpiresAt(multiClassifyResult.ExpiresAt)
+					if expiresAt != nil {
+						v := &rules.RuleVerdict{
+							Expired:    expired,
+							ExpiresAt:  expiresAt,
+							Rule:       rule, // use current rule for destination
+							Reason:     multiClassifyResult.Reason,
+							Confidence: multiClassifyResult.Confidence,
+						}
+						if !expired {
+							// Future expiry — also classify so it lands in the right folder now.
+							matchedCat := strings.ToLower(multiClassifyResult.Category)
+							if matchedCat != "" && matchedCat != "none" {
+								if matchedRule, ok := classifyRulesByCategory[matchedCat]; ok {
+									v.Classified = true
+									v.Rule = matchedRule
+								}
+							}
+						}
+						return v, nil
+					}
+				}
+
+				matchedCat := strings.ToLower(multiClassifyResult.Category)
+				if matchedCat != "" && matchedCat != "none" && multiClassifyResult.Confidence > 0 {
+					if matchedRule, ok := classifyRulesByCategory[matchedCat]; ok {
+						return &rules.RuleVerdict{
+							Classified: true,
+							Rule:       matchedRule,
+							Reason:     multiClassifyResult.Reason,
+							Confidence: multiClassifyResult.Confidence,
+						}, nil
+					}
+				}
+				continue // skip individual call — batch already answered
+			}
+
+			// Fallback: single-rule classify (only if batch wasn't used).
 			v, err := s.evaluateLLM(ctx, client, msg, rule, true)
 			if err != nil {
 				log.Printf("scanner: llm-classify eval for %q rule %q: %v", msg.MessageID, rule.Name, err)
@@ -266,6 +360,67 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 	}
 
 	return nil, nil
+}
+
+// parseExpiresAt parses an expiry date string and returns the time and whether
+// it's already in the past.
+func parseExpiresAt(s string) (*time.Time, bool) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
+		t, err := time.Parse(layout, s)
+		if err == nil {
+			return &t, time.Now().After(t)
+		}
+	}
+	return nil, false
+}
+
+// evaluateMultiClassify runs a single LLM call that classifies a message into
+// one of several categories. This replaces N separate llm-classify calls with one.
+func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, classifyRules []db.Rule) (*llm.LLMResponse, error) {
+	body, fetchErr := client.FetchBody(msg.Folder, msg.UID)
+	if fetchErr != nil {
+		log.Printf("scanner: multi-classify fetch body uid=%d: %v", msg.UID, fetchErr)
+		body = ""
+	}
+	if len(body) > 2000 {
+		body = body[:2000]
+	}
+
+	var categories []string
+	for _, r := range classifyRules {
+		categories = append(categories, r.ExpirationConfig.Category)
+	}
+
+	// Gather training examples across all categories.
+	var allExamples []db.TrainingExample
+	for _, cat := range categories {
+		examples, err := s.db.GetTrainingExamples(cat)
+		if err != nil {
+			log.Printf("scanner: get training examples for %q: %v", cat, err)
+			continue
+		}
+		allExamples = append(allExamples, examples...)
+	}
+
+	refs := make([]llm.TrainingRef, 0, len(allExamples))
+	for _, ex := range allExamples {
+		refs = append(refs, llm.TrainingRef{Sender: ex.Sender, Subject: ex.Subject})
+	}
+
+	msgData := llm.MessageData{
+		Sender:      msg.Sender,
+		Subject:     msg.Subject,
+		SentDate:    msg.Date.Format(time.RFC3339),
+		BodySnippet: body,
+	}
+
+	systemPrompt, userContent := llm.BuildMultiClassificationPrompt(msgData, categories, refs)
+	result, err := llm.CallLLM(ctx, &s.cfg.LLM, systemPrompt, userContent)
+	if err != nil {
+		return nil, fmt.Errorf("call llm: %w", err)
+	}
+
+	return result, nil
 }
 
 // evaluateLLM handles both "llm" and "llm-classify" rule types using the cache.
