@@ -21,6 +21,7 @@ type LLMResponse struct {
 	Reason          string  `json:"reason"`
 	Confidence      float64 `json:"confidence"`
 	Matches         bool    `json:"matches"`
+	Category        string  `json:"category"` // used by multi-classify
 }
 
 var mdFenceRe = regexp.MustCompile("(?s)^```[a-zA-Z]*\\n?(.*?)\\n?```$")
@@ -44,8 +45,8 @@ func ParseJSONResponse(text string) (*LLMResponse, error) {
 
 	resp := &LLMResponse{}
 
-	// isTimeSensitive / is_time_sensitive
-	if v, ok := firstRaw(raw, "isTimeSensitive", "is_time_sensitive"); ok {
+	// isTimeSensitive / is_time_sensitive / expired
+	if v, ok := firstRaw(raw, "isTimeSensitive", "is_time_sensitive", "expired"); ok {
 		_ = json.Unmarshal(v, &resp.IsTimeSensitive)
 	}
 
@@ -70,6 +71,11 @@ func ParseJSONResponse(text string) (*LLMResponse, error) {
 	// matches
 	if v, ok := firstRaw(raw, "matches"); ok {
 		_ = json.Unmarshal(v, &resp.Matches)
+	}
+
+	// category (multi-classify)
+	if v, ok := firstRaw(raw, "category"); ok {
+		_ = json.Unmarshal(v, &resp.Category)
 	}
 
 	// Clamp confidence.
@@ -111,6 +117,7 @@ type geminiRequest struct {
 	SystemInstruction geminiContent    `json:"systemInstruction"`
 	Contents          []geminiContent  `json:"contents"`
 	GenerationConfig  geminiGenConfig  `json:"generationConfig"`
+	ServiceTier       string           `json:"service_tier,omitempty"`
 }
 
 type geminiContent struct {
@@ -134,12 +141,16 @@ type geminiResponse struct {
 }
 
 func callGemini(ctx context.Context, cfg *config.GeminiConfig, systemPrompt, userContent string) (*LLMResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := 30 * time.Second
+	if cfg.ServiceTier == "flex" {
+		timeout = 5 * time.Minute // flex uses spare capacity, can be slower
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	model := cfg.Model
 	if model == "" {
-		model = "gemini-pro"
+		model = "gemini-2.0-flash"
 	}
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 
@@ -148,9 +159,10 @@ func callGemini(ctx context.Context, cfg *config.GeminiConfig, systemPrompt, use
 		Contents:          []geminiContent{{Parts: []geminiPart{{Text: userContent}}}},
 		GenerationConfig: geminiGenConfig{
 			Temperature:      0.1,
-			MaxOutputTokens:  512,
+			MaxOutputTokens:  8192,
 			ResponseMimeType: "application/json",
 		},
+		ServiceTier: cfg.ServiceTier,
 	}
 
 	b, err := json.Marshal(body)
@@ -158,34 +170,61 @@ func callGemini(ctx context.Context, cfg *config.GeminiConfig, systemPrompt, use
 		return nil, fmt.Errorf("marshalling Gemini request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
-	if err != nil {
-		return nil, fmt.Errorf("creating Gemini request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", cfg.APIKey)
+	// Retry loop: on 503 (capacity), retry up to 3 times with backoff.
+	// On the final retry, fall back to standard tier if using flex.
+	maxRetries := 3
+	var lastErr error
+	for attempt := range maxRetries {
+		reqBody := b
+		if attempt == maxRetries-1 && cfg.ServiceTier == "flex" {
+			// Final attempt: drop flex tier to use standard capacity.
+			body.ServiceTier = ""
+			reqBody, _ = json.Marshal(body)
+		}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling Gemini: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("creating Gemini request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-goog-api-key", cfg.APIKey)
 
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Gemini returned HTTP %d: %s", resp.StatusCode, string(raw))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("calling Gemini: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("Gemini returned HTTP 503 (attempt %d/%d)", attempt+1, maxRetries)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
+			}
+			continue
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			raw, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("Gemini returned HTTP %d: %s", resp.StatusCode, string(raw))
+		}
+
+		var gr geminiResponse
+		if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+			return nil, fmt.Errorf("decoding Gemini response: %w", err)
+		}
+		if len(gr.Candidates) == 0 || len(gr.Candidates[0].Content.Parts) == 0 {
+			return nil, fmt.Errorf("Gemini returned empty candidates")
+		}
+
+		text := gr.Candidates[0].Content.Parts[0].Text
+		return ParseJSONResponse(text)
 	}
 
-	var gr geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
-		return nil, fmt.Errorf("decoding Gemini response: %w", err)
-	}
-	if len(gr.Candidates) == 0 || len(gr.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("Gemini returned empty candidates")
-	}
-
-	text := gr.Candidates[0].Content.Parts[0].Text
-	return ParseJSONResponse(text)
+	return nil, fmt.Errorf("Gemini unavailable after %d retries: %w", maxRetries, lastErr)
 }
 
 // --- Ollama ---
@@ -227,7 +266,7 @@ func callOllama(ctx context.Context, cfg *config.OllamaConfig, systemPrompt, use
 		},
 		Stream:  false,
 		Format:  "json",
-		Options: ollamaOptions{Temperature: 0.1, NumPredict: 512},
+		Options: ollamaOptions{Temperature: 0.1, NumPredict: 1024},
 	}
 
 	b, err := json.Marshal(body)

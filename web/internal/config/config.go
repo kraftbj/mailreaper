@@ -26,8 +26,9 @@ type Account struct {
 
 // GeminiConfig holds Gemini LLM settings.
 type GeminiConfig struct {
-	APIKey string `yaml:"api_key"`
-	Model  string `yaml:"model"`
+	APIKey      string `yaml:"api_key"`
+	Model       string `yaml:"model"`
+	ServiceTier string `yaml:"service_tier"` // "flex" for 50% cost reduction
 }
 
 // OllamaConfig holds Ollama LLM settings.
