@@ -12,11 +12,12 @@ import (
 // Message holds the header-level information needed for rule evaluation.
 // It mirrors the subset of Thunderbird's MessageHeader used by the JS engine.
 type Message struct {
-	Author    string
-	Subject   string
-	Date      time.Time
-	Folder    string
-	MessageID string
+	Author         string
+	OriginalSender string // from X-SimpleLogin-Original-From or similar headers
+	Subject        string
+	Date           time.Time
+	Folder         string
+	MessageID      string
 }
 
 // RuleVerdict is the result of evaluating a message against a single rule.
@@ -53,14 +54,21 @@ func MatchesRule(msg *Message, rule db.Rule) bool {
 		}
 	}
 
-	// Sender patterns — try raw author and extracted email
+	// Sender patterns — try raw author, extracted email, and original sender
+	// (for forwarding services like SimpleLogin).
 	if len(mc.SenderPatterns) > 0 {
 		authorRaw := strings.ToLower(msg.Author)
 		emailOnly := strings.ToLower(ExtractEmail(msg.Author))
+		origRaw := strings.ToLower(msg.OriginalSender)
+		origEmail := strings.ToLower(ExtractEmail(msg.OriginalSender))
 		matched := false
 		for _, pattern := range mc.SenderPatterns {
 			p := strings.ToLower(pattern)
 			if GlobMatch(authorRaw, p) || (emailOnly != "" && GlobMatch(emailOnly, p)) {
+				matched = true
+				break
+			}
+			if origRaw != "" && (GlobMatch(origRaw, p) || (origEmail != "" && GlobMatch(origEmail, p))) {
 				matched = true
 				break
 			}
