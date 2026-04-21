@@ -24,6 +24,7 @@ const STORAGE_KEYS = {
   SETTINGS: "mailreaper_settings",
   ACTIVITY_LOG: "mailreaper_activity",
   LLM_CACHE: "mailreaper_llm_cache",
+  NO_MATCH_CACHE: "mailreaper_no_match_cache",
   INITIALIZED: "mailreaper_initialized",
   MANUAL_OVERRIDES: "mailreaper_manual_overrides",
   TRAINING_EXAMPLES: "mailreaper_training_examples",
@@ -321,6 +322,59 @@ export async function removeCachedVerdict(messageIdHeader) {
 
 export async function clearLlmCache() {
   await messenger.storage.local.set({ [STORAGE_KEYS.LLM_CACHE]: {} });
+}
+
+// ── No-Match Cache (persisted) ──────────────────────────────────────────────
+// Tracks messages evaluated by the scan that matched no rule. Keyed by
+// headerMessageId so lookups survive message moves and folder compaction.
+// Each entry stores { fingerprint, trace, cachedAt }.
+
+const NO_MATCH_CACHE_MAX = 10000;
+
+export async function getNoMatchCache() {
+  const { [STORAGE_KEYS.NO_MATCH_CACHE]: cache } =
+    await messenger.storage.local.get(STORAGE_KEYS.NO_MATCH_CACHE);
+  return cache || {};
+}
+
+export async function getNoMatchEntry(headerMessageId) {
+  if (!headerMessageId) return null;
+  const cache = await getNoMatchCache();
+  return cache[headerMessageId] || null;
+}
+
+export async function setNoMatchEntry(headerMessageId, entry) {
+  if (!headerMessageId) return;
+  return withLock(STORAGE_KEYS.NO_MATCH_CACHE, async () => {
+    const { [STORAGE_KEYS.NO_MATCH_CACHE]: cache } =
+      await messenger.storage.local.get(STORAGE_KEYS.NO_MATCH_CACHE);
+    const updated = cache || {};
+    updated[headerMessageId] = { ...entry, cachedAt: Date.now() };
+
+    const entries = Object.entries(updated);
+    if (entries.length > NO_MATCH_CACHE_MAX) {
+      entries.sort((a, b) => b[1].cachedAt - a[1].cachedAt);
+      const pruned = Object.fromEntries(entries.slice(0, NO_MATCH_CACHE_MAX));
+      await messenger.storage.local.set({ [STORAGE_KEYS.NO_MATCH_CACHE]: pruned });
+    } else {
+      await messenger.storage.local.set({ [STORAGE_KEYS.NO_MATCH_CACHE]: updated });
+    }
+  });
+}
+
+export async function removeNoMatchEntry(headerMessageId) {
+  if (!headerMessageId) return;
+  return withLock(STORAGE_KEYS.NO_MATCH_CACHE, async () => {
+    const { [STORAGE_KEYS.NO_MATCH_CACHE]: cache } =
+      await messenger.storage.local.get(STORAGE_KEYS.NO_MATCH_CACHE);
+    if (!cache || !cache[headerMessageId]) return;
+    delete cache[headerMessageId];
+    await messenger.storage.local.set({ [STORAGE_KEYS.NO_MATCH_CACHE]: cache });
+  });
+}
+
+export async function clearNoMatchCache() {
+  await messenger.storage.local.set({ [STORAGE_KEYS.NO_MATCH_CACHE]: {} });
 }
 
 // ── Manual Overrides ─────────────────────────────────────────────────────────

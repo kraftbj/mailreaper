@@ -13,7 +13,9 @@ import {
   initializeStorage, getSettings, getRules, getActivityLog, logActivity, updateSettings,
   getManualOverrides, setManualOverride, removeManualOverride,
   addTrainingExample, getTrainingExamples, removeTrainingExampleBySubject, saveRule,
-  getCachedVerdict, removeCachedVerdict, STORAGE_KEYS, withLock,
+  getCachedVerdict, removeCachedVerdict,
+  getNoMatchEntry, setNoMatchEntry, removeNoMatchEntry, clearNoMatchCache,
+  STORAGE_KEYS, withLock,
 } from "./rules/storage.js";
 import { evaluateMessage } from "./rules/engine.js";
 import { executeAction, cleanupGracePeriod } from "./actions/executor.js";
@@ -58,14 +60,8 @@ async function restoreScanState() {
   }
 }
 
-// Tracks messages already evaluated with no match.
-// Keyed by Thunderbird internal message.id (not headerMessageId), value is { fingerprint, trace } where fingerprint is
-// the rules fingerprint at evaluation time and trace lists rules checked.
-// When rules change, the cache is cleared so messages are re-evaluated.
-// In-memory only — resets on service worker restart, which is acceptable
-// since re-evaluation is cheap compared to LLM calls.
-// Capped at 10,000 entries (oldest evicted first).
-let evaluatedNoMatch = new Map();
+// Rules fingerprint — when it changes, the no-match cache is cleared so
+// messages are re-evaluated under the updated rule set.
 let currentRulesFingerprint = null;
 
 // ── Initialization ──────────────────────────────────────────────────────────
@@ -252,15 +248,23 @@ async function runScan() {
     const rules = await getRules();
     const fingerprint = computeRulesFingerprint(rules);
     if (currentRulesFingerprint !== null && currentRulesFingerprint !== fingerprint) {
-      evaluatedNoMatch.clear();
-      console.log("[MailReaper] Rules fingerprint changed, cleared evaluation cache");
+      await clearNoMatchCache();
+      console.log("[MailReaper] Rules fingerprint changed, cleared no-match cache");
     }
     currentRulesFingerprint = fingerprint;
 
     // Load manual overrides once for the entire scan
     const overrides = await getManualOverrides();
 
-    const cachedCount = evaluatedNoMatch.size;
+    // Load no-match cache once for skip checks (avoids per-message storage reads)
+    const noMatchCache = await (async () => {
+      try {
+        const { mailreaper_no_match_cache: cache } =
+          await messenger.storage.local.get("mailreaper_no_match_cache");
+        return cache || {};
+      } catch { return {}; }
+    })();
+    const cachedCount = Object.keys(noMatchCache).length;
     console.log(`[MailReaper] Starting scan of ${folders.length} folder(s):`, folders.map((f) => f.path || f.name));
     console.log(`[MailReaper] Skipping ${cachedCount} previously evaluated messages`);
 
@@ -302,7 +306,7 @@ async function runScan() {
 
             // Skip messages we've already evaluated with no match
             // under the current rules fingerprint
-            if (evaluatedNoMatch.get(message.id)?.fingerprint === fingerprint) {
+            if (message.headerMessageId && noMatchCache[message.headerMessageId]?.fingerprint === fingerprint) {
               skipped++;
               continue;
             }
@@ -329,21 +333,12 @@ async function runScan() {
             if (verdict && (verdict.expired || verdict.classified)) {
               await executeAction(message, verdict);
               expired++;
-            } else if (!verdict?.hasLlmError) {
+            } else if (!verdict?.hasLlmError && message.headerMessageId) {
               // Only cache no-match if there was no LLM error — LLM errors
               // are cached with a short TTL, so the message should be
               // re-evaluated on the next scan after the error cache expires.
               const trace = verdict?.trace || [];
-              evaluatedNoMatch.set(message.id, { fingerprint, trace });
-
-              if (evaluatedNoMatch.size > 10000) {
-                const excess = evaluatedNoMatch.size - 10000;
-                let count = 0;
-                for (const key of evaluatedNoMatch.keys()) {
-                  if (count++ >= excess) break;
-                  evaluatedNoMatch.delete(key);
-                }
-              }
+              await setNoMatchEntry(message.headerMessageId, { fingerprint, trace });
             }
           } catch (e) {
             errors++;
@@ -563,6 +558,12 @@ async function getMessageInfo(messageId) {
       const reason = activityEntry.reason || "";
       const parts = [rule, reason].filter(Boolean);
       info.status.push({ icon, text: parts.join(" — ") || activityEntry.type });
+      if (activityEntry.expiresAt) {
+        const expDate = new Date(activityEntry.expiresAt);
+        if (!isNaN(expDate.getTime())) {
+          info.status.push({ icon: "📅", text: `Expired: ${expDate.toLocaleString()}` });
+        }
+      }
       if (activityEntry.confidence && activityEntry.confidence < 1) {
         info.status.push({ icon: "🎯", text: `Confidence: ${Math.round(activityEntry.confidence * 100)}%` });
       }
@@ -590,6 +591,12 @@ async function getMessageInfo(messageId) {
         info.status.push({ icon: "⚠️", text: `LLM error: ${cached.error}` });
       } else if (cached.expired) {
         info.status.push({ icon: "🔴", text: `LLM: expired — ${cached.reason}` });
+        if (cached.expiresAt) {
+          const expDate = new Date(cached.expiresAt);
+          if (!isNaN(expDate.getTime())) {
+            info.status.push({ icon: "📅", text: `Expired: ${expDate.toLocaleString()}` });
+          }
+        }
       } else if (cached.classified) {
         info.status.push({ icon: "📂", text: `LLM: classified — ${cached.reason}` });
       } else if (cached.expiresAt) {
@@ -597,8 +604,10 @@ async function getMessageInfo(messageId) {
         const now = new Date();
         if (now > expiresAt) {
           info.status.push({ icon: "🔴", text: `LLM: expired — ${cached.reason}` });
+          info.status.push({ icon: "📅", text: `Expired: ${expiresAt.toLocaleString()}` });
         } else {
           info.status.push({ icon: "🟡", text: `LLM: expires ${formatRelativeTimeBackground(expiresAt)} — ${cached.reason}` });
+          info.status.push({ icon: "📅", text: `Expires: ${expiresAt.toLocaleString()}` });
         }
       } else {
         info.status.push({ icon: "🟢", text: `LLM: not time-sensitive — ${cached.reason}` });
@@ -606,8 +615,8 @@ async function getMessageInfo(messageId) {
       info.hasCachedVerdict = true;
     }
 
-    // Check evaluatedNoMatch
-    const noMatchEntry = evaluatedNoMatch.get(messageId);
+    // Check no-match cache (persisted)
+    const noMatchEntry = await getNoMatchEntry(headerMessageId);
     if (noMatchEntry) {
       const trace = noMatchEntry.trace || [];
       if (trace.length > 0) {
@@ -795,8 +804,10 @@ async function handleSetManualExpiry(messageId, hours) {
       headerMessageId,
     });
 
-    // Clear evaluatedNoMatch so next scan re-evaluates this message
-    evaluatedNoMatch.delete(msg.id);
+    // Clear no-match cache so next scan re-evaluates this message
+    if (headerMessageId) {
+      await removeNoMatchEntry(headerMessageId);
+    }
 
     return { success: true, expiresAt };
   } catch (e) {
@@ -1110,19 +1121,19 @@ messenger.storage.onChanged.addListener((changes, area) => {
     currentRulesFingerprint = null;
 
     if (oldFingerprint !== null) {
-      evaluatedNoMatch.clear();
-      console.log("[MailReaper] Rules changed, cleared evaluation cache");
+      clearNoMatchCache().catch((e) => console.error("[MailReaper] Failed to clear no-match cache:", e));
+      console.log("[MailReaper] Rules changed, cleared no-match cache");
     }
   }
 
-  // Clear evaluation cache when LLM provider changes — messages that were
+  // Clear no-match cache when LLM provider changes — messages that were
   // skipped because LLM was "none" need to be re-evaluated
   if (changes.mailreaper_settings) {
     const oldSettings = changes.mailreaper_settings.oldValue || {};
     const newSettings = changes.mailreaper_settings.newValue || {};
     if (oldSettings.llmProvider !== newSettings.llmProvider) {
-      evaluatedNoMatch.clear();
-      console.log(`[MailReaper] LLM provider changed (${oldSettings.llmProvider} → ${newSettings.llmProvider}), cleared evaluation cache`);
+      clearNoMatchCache().catch((e) => console.error("[MailReaper] Failed to clear no-match cache:", e));
+      console.log(`[MailReaper] LLM provider changed (${oldSettings.llmProvider} → ${newSettings.llmProvider}), cleared no-match cache`);
     }
   }
 });
