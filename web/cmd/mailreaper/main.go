@@ -106,6 +106,12 @@ func main() {
 	srv.OnScanRequested = func() {
 		runFullScan(ctx, scan, cfg)
 	}
+	srv.OnRescanRequested = func() {
+		prev := scan.LookbackDays
+		scan.LookbackDays = 0
+		runFullScan(ctx, scan, cfg)
+		scan.LookbackDays = prev
+	}
 	log.Printf("starting web server on :%d", cfg.Server.Port)
 	if err := srv.Start(ctx); err != nil {
 		log.Printf("web server error: %v", err)
@@ -154,9 +160,22 @@ func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config)
 			log.Printf("scan: DetectManualClassifications for %q: %v", acct.Name, err)
 		}
 
+		if err := scan.SweepDeferredExpiries(client, acct.Username); err != nil {
+			log.Printf("scan: SweepDeferredExpiries for %q: %v", acct.Name, err)
+		}
+
+		if err := scan.SweepExpiredNotifications(client, acct.Username); err != nil {
+			log.Printf("scan: SweepExpiredNotifications for %q: %v", acct.Name, err)
+		}
+
 		if err := client.Close(); err != nil {
 			log.Printf("scan: close connection for %q: %v", acct.Name, err)
 		}
+	}
+
+	// Distill manual classification patterns into static rules.
+	if err := scan.DistillRules(); err != nil {
+		log.Printf("scan: DistillRules: %v", err)
 	}
 
 	log.Printf("scan: full scan complete")

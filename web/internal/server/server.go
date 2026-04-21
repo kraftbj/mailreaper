@@ -10,10 +10,11 @@ import (
 
 // Server holds the HTTP mux and its dependencies.
 type Server struct {
-	db              *db.DB
-	mux             *http.ServeMux
-	port            int
-	OnScanRequested func() // called when user clicks "Scan Now"
+	db                *db.DB
+	mux               *http.ServeMux
+	port              int
+	OnScanRequested   func()     // called when user clicks "Scan Now"
+	OnRescanRequested func() // full rescan: no lookback limit, no message cap
 }
 
 // NewServer creates a Server and registers all routes on the mux.
@@ -70,6 +71,7 @@ func (s *Server) registerRoutes() {
 
 	s.mux.HandleFunc("GET /api/stats", s.handleGetStats)
 	s.mux.HandleFunc("POST /api/scan", s.handleScanNow)
+	s.mux.HandleFunc("POST /api/rescan", s.handleRescan)
 
 	s.mux.HandleFunc("GET /api/events", s.handleSSE)
 

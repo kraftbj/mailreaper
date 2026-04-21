@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kraftbj/mailreaper/internal/db"
@@ -53,9 +54,18 @@ func (s *Server) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, rule)
 }
 
-// handleDeleteRule removes a rule by its path parameter ID.
+// handleDeleteRule removes a rule by its path parameter ID. If the rule was
+// auto-generated, it records the deletion so the rule won't be re-proposed.
 func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	if strings.HasPrefix(id, "auto-") {
+		if err := s.db.DeclineAutoRule(id); err != nil {
+			jsonError(w, "failed to record rule decline", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	if err := s.db.DeleteRule(id); err != nil {
 		jsonError(w, "failed to delete rule", http.StatusInternalServerError)
 		return
@@ -234,23 +244,26 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	var movedToday, correctedToday int
+	var autoMovedToday, manualMovedToday, correctedToday int
 	for _, e := range entries {
 		if e.CreatedAt.UTC().Before(today) {
 			continue
 		}
 		switch e.Type {
-		case "expired", "triaged", "moved", "classified", "manual_classify":
-			movedToday++
+		case "expired", "triaged", "moved", "classified":
+			autoMovedToday++
+		case "manual_classify":
+			manualMovedToday++
 		case "corrected":
 			correctedToday++
 		}
 	}
 
 	jsonResponse(w, map[string]int{
-		"pendingVerdicts": len(pendingVerdicts),
-		"movedToday":      movedToday,
-		"correctedToday":  correctedToday,
+		"pendingVerdicts":  len(pendingVerdicts),
+		"movedToday":       autoMovedToday,
+		"manualMovedToday": manualMovedToday,
+		"correctedToday":   correctedToday,
 	})
 }
 
@@ -261,4 +274,28 @@ func (s *Server) handleScanNow(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.OnScanRequested()
 	jsonResponse(w, map[string]string{"status": "scan started"})
+}
+
+// handleRescan clears all verdicts and LLM cache, then triggers a full scan.
+// This forces re-evaluation of all inbox messages against current rules.
+func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
+	cleared, err := s.db.ClearAllVerdicts()
+	if err != nil {
+		jsonError(w, "failed to clear verdicts", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.db.ClearLLMCache(); err != nil {
+		jsonError(w, "failed to clear LLM cache", http.StatusInternalServerError)
+		return
+	}
+
+	if s.OnRescanRequested != nil {
+		go s.OnRescanRequested()
+	}
+
+	jsonResponse(w, map[string]any{
+		"status":          "rescan started",
+		"verdictsCleared": cleared,
+	})
 }
