@@ -1,126 +1,167 @@
-# MailReaper 🗡️📧
+# MailReaper
 
-AI-powered email expiration manager for Thunderbird. Automatically identifies and cleans up time-sensitive emails that have passed their useful life.
+AI-powered email triage and expiration manager. Automatically classifies, files, and expires time-sensitive emails so your inbox only contains things that need your attention.
+
+MailReaper exists in two forms: a **Thunderbird extension** (Manifest V3) and a **standalone Go server** that connects via IMAP. The `web-rewrite` branch is the Go server, which is the active development target.
 
 ## What It Does
 
-MailReaper scans your configured email folders on a schedule and evaluates each message against a prioritized list of expiration rules:
+MailReaper scans your inbox on a schedule and evaluates each message against a prioritized list of rules:
 
-- **Static rules** (fast, free): Pattern-match on sender/subject with a fixed TTL. "Any email from `@capmetro.org` expires 2 hours after it was sent."
-- **AI rules** (LLM-powered): Analyze email body content for time-sensitive deadlines. "This sale ended at midnight last night."
-- **Header rules** (standards-based): Honor the emerging `Expires` header RFC when senders set it.
+- **Static rules** (fast, free): Pattern-match on sender/subject and classify or expire. "Any email from `@chase.com` goes to Paper-Trail."
+- **AI classify rules** (LLM-powered): A single multi-category LLM call classifies messages into triage folders (receipts, newsletters, notifications, promotions, hobbies) and detects expiry dates simultaneously.
+- **Header rules** (standards-based): Honor the RFC `Expires` header when senders set it.
+- **Auto-generated rules**: The system learns from your manual classifications. After you drag 3+ messages from the same sender to the same folder, a static rule is created automatically.
 
-Expired emails are moved to an "Expired" folder, then permanently deleted after a configurable grace period.
+Messages are moved to triage folders under `Folders/AI-Triage/`:
+- **Expired** -- time-sensitive emails past their date
+- **Newsletters** -- digests, publications, editorial content
+- **Notifications** -- automated alerts, status updates, tracking
+- **Paper-Trail** -- receipts, statements, payment confirmations
+- **Promotions** -- marketing, sales, re-engagement emails
+- **Hobbies** -- gaming, tabletop RPG, crowdfunding updates
 
-## Installation
+Notifications auto-expire after 3 days and promotions after 7 days. Messages with detected future expiry dates (e.g. "event on Saturday") are classified now and automatically moved to Expired when the date passes.
 
-MailReaper is not yet available on [addons.thunderbird.net](https://addons.thunderbird.net). To install it, build the `.xpi` package and load it manually.
+## Go Server (`web/`)
 
-### Building
+### Setup
 
 ```bash
-make
+cd web
+cp config.yaml.example config.yaml  # edit with your IMAP and LLM settings
+go build -o mailreaper ./cmd/mailreaper
+./mailreaper
 ```
 
-This produces `mailreaper.xpi` in the project root.
+The web dashboard runs at `http://localhost:8025`.
 
-### Installing the .xpi
+### Configuration
 
-1. Open Thunderbird
-2. Go to **Add-ons Manager** (Tools → Add-ons and Themes)
-3. Click the gear icon → **Install Add-on From File…**
-4. Select `mailreaper.xpi`
+Edit `config.yaml`:
 
-### Loading for development
+```yaml
+accounts:
+  - name: Personal
+    host: imap.example.com
+    port: 993
+    username: you@example.com
+    password: ${IMAP_PASSWORD}  # env var substitution supported
+    tls: true
+    folders:
+      scan:
+        - INBOX
 
-1. Go to **Add-ons Manager** → gear icon → **Debug Add-ons**
-2. Click **Load Temporary Add-on**
-3. Select `manifest.json` from this directory
+llm:
+  provider: gemini  # gemini | ollama | none
+  gemini:
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-2.5-flash
+    service_tier: flex  # 50% cost reduction, uses spare capacity
+  ollama:
+    endpoint: http://localhost:11434
+    model: qwen2.5:7b
 
-## Configuration
+scan:
+  interval_minutes: 30
+  min_message_age_min: 60
+  max_messages_per_scan: 100
 
-Click the MailReaper toolbar button → **Settings**, or go to Add-ons → MailReaper → Preferences.
+server:
+  port: 8025
+```
 
-### Quick Start
+### LLM Providers
 
-1. **Folders tab**: Select which folders to scan (defaults to Inbox if none selected)
-2. **Rules tab**: Enable/disable built-in rules, add your own
-3. **AI tab**: Optionally configure Gemini or Ollama for content analysis
-4. **General tab**: Adjust scan interval and grace period
-
-### LLM Setup
-
-**Gemini (cloud):**
+**Gemini (recommended):**
 - Get an API key at [Google AI Studio](https://aistudio.google.com/apikey)
-- Select a model (2.5 Flash is cheapest, 3 Flash is smartest)
-- Cost is essentially zero at typical email volumes (~$0.002/day)
+- The `flex` service tier halves the cost by using spare capacity (with automatic retry and fallback to standard tier on 503s)
+- Cost at typical volumes: under $0.15/month
 
-**Ollama (local/self-hosted):**
-- Install [Ollama](https://ollama.com/) and pull a model: `ollama pull llama3.2:3b`
-- Set the endpoint URL (default: `http://localhost:11434`)
-- For remote servers, use a Tailscale address
+**Ollama (local):**
+- Install [Ollama](https://ollama.com/) and pull a model: `ollama pull qwen2.5:7b`
+- Free but slower and less accurate than Gemini, especially for date reasoning
 
-## Built-in Rules
+### Flags
 
-| Rule | Default | TTL | Description |
-|------|---------|-----|-------------|
-| OTP/verification codes | ✅ Enabled | 1 hour | Login codes, 2FA, email verification |
-| Delivery confirmations | ✅ Enabled | 72 hours | UPS, FedEx, USPS "delivered" notices |
-| Transit alerts | ❌ Disabled | 2 hours | CapMetro, MTA, BART delay alerts |
-| Calendar reminders | ✅ Enabled | 24 hours | Google Calendar, Calendly reminders |
-| Expires header (RFC) | ✅ Enabled | Per header | Honors the Expires header standard |
-| AI promo scanner | ❌ Disabled | LLM-determined | Scans sale/promo emails for deadlines |
+- `--config path` -- config file (default: `config.yaml`)
+- `--db path` -- SQLite database (default: `mailreaper.db`)
+- `--catchup` -- scan all messages on first run, not just the last 7 days
 
-## Architecture
+### API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/rules` | List all rules |
+| POST | `/api/rules` | Create/update a rule |
+| DELETE | `/api/rules/{id}` | Delete a rule |
+| GET | `/api/activity?limit=N` | Recent activity log |
+| GET | `/api/verdicts/pending` | Pending verdicts |
+| PUT | `/api/verdicts/{id}/status` | Approve/reject a verdict |
+| GET | `/api/categories` | List triage categories |
+| POST | `/api/categories` | Create/update a category |
+| GET | `/api/stats` | Dashboard statistics |
+| POST | `/api/scan` | Trigger a scan |
+| POST | `/api/rescan` | Clear all verdicts and full rescan |
+
+## How It Learns
+
+1. **Manual classification**: Drag a message to a triage folder. The next scan detects it, records a training example, and the LLM uses it as a few-shot reference.
+
+2. **Rule distillation**: After 3+ messages from the same sender are manually classified to the same folder, a static `classify` rule is auto-created. Static rules are faster (no LLM call) and 100% reliable.
+
+3. **Correction feedback**: If you move a message back to the inbox after MailReaper triaged it, the system records the correction and updates its training examples.
+
+4. **SimpleLogin support**: Messages forwarded through SimpleLogin aliases are matched against rules using the `X-SimpleLogin-Original-From` header, so rules like `*@capmetro.org` work even when the envelope sender is `*@simplelogin.co`.
+
+## Architecture (Go Server)
 
 ```
-mailreaper/
-├── manifest.json          # Extension manifest (MV3)
-├── background.js          # Scanner service, alarm handlers, message router
-├── rules/
-│   ├── engine.js          # Rule evaluation logic (glob matching, TTL, LLM dispatch)
-│   ├── storage.js         # Persistence layer (browser.storage.local)
-│   └── defaults.js        # Built-in starter rules
-├── llm/
-│   ├── adapter.js         # Gemini/Ollama abstraction with JSON response parsing
-│   └── prompts.js         # Analysis and rule-generation prompt templates
-├── actions/
-│   └── executor.js        # Move/delete/tag actions + grace period cleanup
-├── options/               # Full settings UI (rules, LLM, folders, activity log)
-├── popup/                 # Toolbar quick-status dashboard
-├── icons/                 # SVG icons
-└── _locales/en/           # i18n strings
+web/
+├── cmd/mailreaper/main.go     # Entry point, scan loop, signal handling
+├── internal/
+│   ├── config/                # YAML config with env var substitution
+│   ├── db/                    # SQLite (modernc.org/sqlite, WAL mode)
+│   │   ├── verdicts.go        # Per-message expiration decisions
+│   │   ├── rules.go           # Rule CRUD and seeding
+│   │   ├── activity.go        # Activity log
+│   │   ├── llmcache.go        # LLM response cache with tiered TTL
+│   │   ├── training.go        # Few-shot examples (50 per category)
+│   │   ├── categories.go      # Triage folder definitions
+│   │   └── distill.go         # Pattern mining for auto-rule creation
+│   ├── imap/                  # go-imap/v2 client wrapper
+│   ├── llm/
+│   │   ├── adapter.go         # Gemini/Ollama with retry and flex fallback
+│   │   └── prompts.go         # Analysis, classification, multi-classify
+│   ├── rules/
+│   │   ├── engine.go          # Rule matching and evaluation
+│   │   ├── defaults.go        # Built-in rule definitions
+│   │   └── glob.go            # Glob pattern matching
+│   ├── scanner/
+│   │   ├── scanner.go         # Main scan loop, multi-classify batching
+│   │   ├── feedback.go        # Correction detection, manual classification
+│   │   ├── distill.go         # Training-to-rule promotion
+│   │   └── sweep.go           # Deferred expiry and folder age-out
+│   └── server/                # HTTP API and SSE
+└── scripts/
+    └── seed-user-rules.sh     # Bulk-add sender-specific rules via API
 ```
 
-## Development Notes
+### Scan Cycle
 
-- **Manifest V3** with ES modules (`"type": "module"` in background)
-- Uses `messenger.*` namespace (Thunderbird's alias for `browser.*`)
-- All inter-component communication via `messenger.runtime.sendMessage()`
-- LLM responses are cached by Message-ID header to avoid re-analysis
-- Grace period cleanup runs on a separate 6-hour alarm
+1. Connect to IMAP, fetch messages from configured folders
+2. For each message, evaluate against enabled rules sorted by priority:
+   - Static rules (TTL, header, content-regex, classify) run first
+   - LLM rules batch all classify categories into a single call that also detects expiry
+3. High-confidence verdicts (>= 0.7) auto-execute; low-confidence queue as pending
+4. Detect manual classifications in triage folders, record training examples
+5. Sweep deferred expiries (future dates that have now passed)
+6. Sweep aged-out notifications (3 days) and promotions (7 days)
+7. Distill manual classification patterns into static rules
 
-### Key APIs Used
+## Thunderbird Extension
 
-- `messenger.messages.query()` — Find candidate messages by folder and date
-- `messenger.messages.getFull()` — Access headers (including Message-ID, Expires)
-- `messenger.messages.listInlineTextParts()` — Extract body text for LLM analysis
-- `messenger.messages.move()` / `delete()` — Execute expiration actions
-- `messenger.messages.tags.*` — Custom "Expired" tag management
-- `messenger.folders.create()` — Auto-create the "Expired" folder
-- `messenger.alarms.*` — Schedule scan and cleanup cycles
-- `messenger.storage.local` — Persist rules, settings, cache, activity log
-
-### Known Limitations / TODO
-
-- [ ] Drag-to-reorder rules in the UI (wired in storage, needs DnD in options.js)
-- [ ] "Create Rule from Examples" UI flow (LLM backend is ready in adapter.js)
-- [ ] Per-rule folder scoping (data model supports it, UI doesn't expose it yet)
-- [x] Undo support for individual actions
-- [ ] Surface messages flagged as time-sensitive by LLM but without a parseable expiration date
-- [ ] IMAP-specific edge cases (offline folders, slow connections)
-- [ ] ATN submission and review
-- [ ] Localization beyond English
+The original Thunderbird extension is in the root directory. See `manifest.json` for the extension manifest. Load it via Tools > Add-ons > Debug Add-ons > Load Temporary Add-on.
 
 ## License
 
