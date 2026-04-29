@@ -77,9 +77,13 @@ A hard deadline is an explicit date/time in the email after which the
 message has zero remaining value.
 
 Hard deadlines (extract these as expiresAt):
-- Sale-end dates ("sale ends Friday", "today only", "ends tonight",
-  "last chance", "final hours", "expires at midnight") — use midnight on
-  the SEND DATE if no explicit time is given.
+- Explicit dated sale-ends ("sale ends Friday", "ends 4/28", "valid
+  through April 30") — use that specific calendar date at 23:59:59 if no
+  time is given. Compute the actual date relative to the SEND DATE.
+- Send-date-only phrases ("today only", "ends tonight", "ends at
+  midnight", "final hours") — use midnight at the END of the SEND DATE.
+- "Last chance" without an explicit date and within a marketing context
+  — use midnight at the end of the SEND DATE.
 - RSVP-by deadlines for events.
 - Specific appointment or event start times.
 - OTP / verification code validity windows — use 1 hour after send.
@@ -267,9 +271,13 @@ A hard deadline is an explicit date/time in the email after which the
 message has zero remaining value.
 
 Hard deadlines (extract these as expiresAt):
-- Sale-end dates ("sale ends Friday", "today only", "ends tonight",
-  "last chance", "final hours", "expires at midnight") — use midnight on
-  the SEND DATE if no explicit time is given.
+- Explicit dated sale-ends ("sale ends Friday", "ends 4/28", "valid
+  through April 30") — use that specific calendar date at 23:59:59 if no
+  time is given. Compute the actual date relative to the SEND DATE.
+- Send-date-only phrases ("today only", "ends tonight", "ends at
+  midnight", "final hours") — use midnight at the END of the SEND DATE.
+- "Last chance" without an explicit date and within a marketing context
+  — use midnight at the end of the SEND DATE.
 - RSVP-by deadlines for events.
 - Specific appointment or event start times.
 - OTP / verification code validity windows — use 1 hour after send.

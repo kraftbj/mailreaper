@@ -452,9 +452,21 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 	}
 
 	var categories []string
+	var customPrompts []string
+	seenPrompt := map[string]bool{}
 	for _, r := range classifyRules {
 		categories = append(categories, r.ExpirationConfig.Category)
+		// Gather distinct non-empty custom prompts across all classify rules.
+		// Per-rule prompts are merged into a shared "Additional user-provided
+		// guidelines" section since multi-classify makes one LLM call for all
+		// categories together. The single-rule case (one entry in classifyRules)
+		// preserves that rule's CustomPrompt verbatim.
+		if p := r.ExpirationConfig.Prompt; p != "" && !seenPrompt[p] {
+			customPrompts = append(customPrompts, p)
+			seenPrompt[p] = true
+		}
 	}
+	customPrompt := strings.Join(customPrompts, "\n\n")
 
 	// Gather training examples across all categories.
 	var allExamples []db.TrainingExample
@@ -473,10 +485,11 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 	}
 
 	msgData := llm.MessageData{
-		Sender:      msg.Sender,
-		Subject:     msg.Subject,
-		SentDate:    msg.Date.Format(time.RFC3339),
-		BodySnippet: body,
+		Sender:       msg.Sender,
+		Subject:      msg.Subject,
+		SentDate:     msg.Date.Format(time.RFC3339),
+		BodySnippet:  body,
+		CustomPrompt: customPrompt,
 	}
 
 	systemPrompt, userContent := llm.BuildMultiClassificationPrompt(msgData, categories, refs)
