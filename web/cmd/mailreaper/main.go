@@ -21,6 +21,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dbPath := flag.String("db", "mailreaper.db", "path to SQLite database file")
 	catchup := flag.Bool("catchup", false, "scan all messages on first run (not just last 7 days)")
+	backfill := flag.Bool("backfill", false, "re-evaluate every message in Expired and triage folders against current rules; rescues mis-routed messages and pulls newly-extractable deadlines forward to Expired")
 	flag.Parse()
 
 	// Load config.
@@ -67,6 +68,11 @@ func main() {
 	if *catchup {
 		log.Println("catchup mode: first scan will process all messages")
 		scan.LookbackDays = 0
+	}
+
+	if *backfill {
+		log.Println("backfill mode: re-evaluating Expired and all triage folders before normal scan loop starts")
+		runBackfill(ctx, scan, cfg)
 	}
 
 	// Start scan loop goroutine — runs immediately, then on interval.
@@ -175,4 +181,44 @@ func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config)
 	}
 
 	log.Printf("scan: full scan complete")
+}
+
+// runBackfill walks every Expired and triage folder for each account,
+// re-evaluating each message against current rules and moving misplaced
+// messages. Triggered by --backfill on startup.
+func runBackfill(ctx context.Context, scan *scanner.Scanner, cfg *config.Config) {
+	log.Printf("backfill: starting across %d account(s)", len(cfg.Accounts))
+
+	for _, acct := range cfg.Accounts {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		client, err := imappkg.Connect(acct)
+		if err != nil {
+			log.Printf("backfill: connect to account %q: %v", acct.Name, err)
+			continue
+		}
+
+		rescue := "INBOX"
+		if folders := acct.Folders.Scan; len(folders) > 0 {
+			rescue = folders[0]
+		}
+
+		stats, err := scan.BackfillFolders(ctx, client, acct.Username, rescue)
+		if err != nil {
+			log.Printf("backfill: BackfillFolders for %q: %v", acct.Name, err)
+		} else if stats != nil {
+			log.Printf("backfill: account %q — folders=%d inspected=%d moved=%d kept=%d skipped=%d errored=%d",
+				acct.Name, stats.Folders, stats.Inspected, stats.Moved, stats.Kept, stats.Skipped, stats.Errored)
+		}
+
+		if err := client.Close(); err != nil {
+			log.Printf("backfill: close connection for %q: %v", acct.Name, err)
+		}
+	}
+
+	log.Printf("backfill: complete")
 }

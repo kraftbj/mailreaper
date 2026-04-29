@@ -126,6 +126,16 @@ func (d *DB) ClearAllVerdicts() (int64, error) {
 	return result.RowsAffected()
 }
 
+// ClearVerdictByMessageID removes the verdict for a single message, used by
+// backfill to force re-evaluation of an already-classified message.
+func (d *DB) ClearVerdictByMessageID(header string) (int64, error) {
+	result, err := d.Exec(`DELETE FROM verdicts WHERE message_id_header = ?`, header)
+	if err != nil {
+		return 0, fmt.Errorf("db: clear verdict by message id: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // GetDeferredExpiries returns verdicts that have an expires_at in the past but
 // haven't been moved to the expired folder yet. These are messages that were
 // classified with a future expiry date that has now arrived.
