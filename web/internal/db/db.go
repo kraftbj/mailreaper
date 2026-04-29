@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -270,6 +271,7 @@ func (d *DB) applyOneShotMigrations() error {
 		if _, err := d.Exec(`INSERT INTO schema_meta (key, value) VALUES (?, ?)`, m.key, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("record migration %q: %w", m.key, err)
 		}
+		log.Printf("db: applied one-shot migration %q", m.key)
 	}
 	return nil
 }
