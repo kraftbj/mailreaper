@@ -8,17 +8,6 @@ import (
 	"github.com/kraftbj/mailreaper/internal/db"
 )
 
-// folderMaxAge defines how long messages stay in each triage folder before
-// being swept to Expired. Folders not listed here are not swept.
-var folderMaxAge = map[string]time.Duration{
-	"notifications": 3 * 24 * time.Hour,  // 3 days
-	"promotions":    7 * 24 * time.Hour,  // 1 week
-	"expired":       0,                    // not swept (already expired)
-	"newsletters":   0,                    // not swept (reading material)
-	"paper-trail":   0,                    // not swept (archival)
-	"hobbies":       0,                    // not swept (reading material)
-}
-
 // SweepDeferredExpiries checks for verdicts with an expiresAt date that has now
 // passed and moves those messages to the Expired folder.
 func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) error {
@@ -117,77 +106,3 @@ func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) err
 	return nil
 }
 
-// SweepExpiredNotifications checks triage folders for messages older than their
-// category's max age and moves them to the Expired folder.
-func (s *Scanner) SweepExpiredNotifications(client MailClient, accountID string) error {
-	categories, err := s.db.GetCategories()
-	if err != nil {
-		return fmt.Errorf("sweep: get categories: %w", err)
-	}
-
-	// Find the expired folder name.
-	expiredFolder := ""
-	for _, cat := range categories {
-		if cat.ID == "expired" {
-			expiredFolder = cat.FolderName
-			break
-		}
-	}
-	if expiredFolder == "" {
-		return nil // no expired category configured
-	}
-
-	for _, cat := range categories {
-		maxAge, ok := folderMaxAge[cat.ID]
-		if !ok || maxAge == 0 || cat.FolderName == "" {
-			continue
-		}
-
-		cutoff := time.Now().Add(-maxAge)
-
-		msgs, err := client.GetMessagesInFolder(cat.FolderName)
-		if err != nil {
-			log.Printf("sweep: get messages in %q: %v", cat.FolderName, err)
-			continue
-		}
-
-		swept := 0
-		for _, msg := range msgs {
-			if msg.Date.After(cutoff) {
-				continue // too recent
-			}
-
-			if err := client.EnsureFolder(expiredFolder); err != nil {
-				log.Printf("sweep: ensure folder %q: %v", expiredFolder, err)
-				break
-			}
-
-			if err := client.MoveMessage(cat.FolderName, msg.UID, expiredFolder); err != nil {
-				log.Printf("sweep: move %q from %q to %q: %v", msg.MessageID, cat.FolderName, expiredFolder, err)
-				continue
-			}
-
-			swept++
-
-			if err := s.db.LogActivity(db.ActivityEntry{
-				Type:            "expired",
-				AccountID:       accountID,
-				MessageIDHeader: msg.MessageID,
-				Subject:         msg.Subject,
-				Sender:          msg.Sender,
-				RuleName:        fmt.Sprintf("Sweep: %s > %s", cat.Name, maxAge),
-				Destination:     expiredFolder,
-				Reason:          fmt.Sprintf("Aged out of %s after %s", cat.Name, maxAge),
-				Confidence:      1.0,
-			}); err != nil {
-				log.Printf("sweep: log activity: %v", err)
-			}
-		}
-
-		if swept > 0 {
-			log.Printf("sweep: moved %d expired messages from %q to %q", swept, cat.FolderName, expiredFolder)
-		}
-	}
-
-	return nil
-}

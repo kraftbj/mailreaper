@@ -164,10 +164,6 @@ func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config)
 			log.Printf("scan: SweepDeferredExpiries for %q: %v", acct.Name, err)
 		}
 
-		if err := scan.SweepExpiredNotifications(client, acct.Username); err != nil {
-			log.Printf("scan: SweepExpiredNotifications for %q: %v", acct.Name, err)
-		}
-
 		if err := client.Close(); err != nil {
 			log.Printf("scan: close connection for %q: %v", acct.Name, err)
 		}
