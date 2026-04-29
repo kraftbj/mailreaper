@@ -15,13 +15,16 @@ import (
 )
 
 // LLMResponse holds the parsed result from an LLM call.
+//
+// The field set reflects the post-rewrite schema: the LLM extracts deadlines
+// and classifies, but does NOT decide whether a deadline has passed. The Go
+// scanner does that comparison after parsing this response.
 type LLMResponse struct {
-	IsTimeSensitive bool    `json:"isTimeSensitive"`
-	ExpiresAt       string  `json:"expiresAt"`
-	Reason          string  `json:"reason"`
-	Confidence      float64 `json:"confidence"`
-	Matches         bool    `json:"matches"`
-	Category        string  `json:"category"` // used by multi-classify
+	ExpiresAt  string  `json:"expiresAt"`
+	Reason     string  `json:"reason"`
+	Confidence float64 `json:"confidence"`
+	Matches    bool    `json:"matches"`
+	Category   string  `json:"category"` // used by multi-classify
 }
 
 var mdFenceRe = regexp.MustCompile("(?s)^```[a-zA-Z]*\\n?(.*?)\\n?```$")
@@ -44,11 +47,6 @@ func ParseJSONResponse(text string) (*LLMResponse, error) {
 	}
 
 	resp := &LLMResponse{}
-
-	// isTimeSensitive / is_time_sensitive / expired
-	if v, ok := firstRaw(raw, "isTimeSensitive", "is_time_sensitive", "expired"); ok {
-		_ = json.Unmarshal(v, &resp.IsTimeSensitive)
-	}
 
 	// expiresAt / expires_at — allow JSON null
 	if v, ok := firstRaw(raw, "expiresAt", "expires_at"); ok {

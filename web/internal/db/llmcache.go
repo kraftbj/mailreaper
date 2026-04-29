@@ -9,26 +9,28 @@ import (
 )
 
 // CachedVerdict is the LLM verdict stored in the cache.
+//
+// The schema reflects the post-rewrite design: the LLM extracts deadlines
+// (ExpiresAt) and may classify into a category (Classified). It does NOT
+// decide whether a deadline has passed — that comparison is done in Go.
 type CachedVerdict struct {
-	IsTimeSensitive bool    `json:"isTimeSensitive,omitempty"`
-	Expired         bool    `json:"expired,omitempty"`
-	Classified      bool    `json:"classified,omitempty"`
-	ExpiresAt       string  `json:"expiresAt,omitempty"`
-	Reason          string  `json:"reason,omitempty"`
-	Confidence      float64 `json:"confidence,omitempty"`
-	Error           string  `json:"error,omitempty"`
+	Classified bool    `json:"classified,omitempty"`
+	ExpiresAt  string  `json:"expiresAt,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Error      string  `json:"error,omitempty"`
 }
 
 // ttl returns the cache duration for a given verdict.
-// Mirrors the tiered TTL from the JS extension:
-//   - error verdicts: 10 minutes
-//   - expired or classified verdicts: 24 hours
-//   - not-sensitive verdicts: 7 days
+//
+//	- error verdicts: 10 minutes (retry sooner)
+//	- verdicts that took action (classified or extracted a deadline): 24 hours
+//	- verdicts that found nothing actionable: 7 days
 func (cv *CachedVerdict) ttl() time.Duration {
 	if cv.Error != "" {
 		return 10 * time.Minute
 	}
-	if cv.Expired || cv.Classified {
+	if cv.Classified || cv.ExpiresAt != "" {
 		return 24 * time.Hour
 	}
 	return 7 * 24 * time.Hour

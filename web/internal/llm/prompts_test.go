@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+// bannedPhrases must NOT appear in either prompt — they were the source of the
+// over-aggressive expiry classification bug fixed in the web-rewrite redesign.
+var bannedPhrases = []string{
+	"any date/time",
+	"BEFORE today, it is expired",
+	"isTimeSensitive",
+	"\"expired\"",
+	"set expired=true",
+}
+
+// negativeExamples must appear in both prompts so the LLM knows these are NOT
+// hard deadlines even when they contain past dates.
+var negativeExamples = []string{
+	"Newsletter",
+	"Transaction",
+	"LinkedIn",
+	"Daily digests",
+	"Memories from",
+	"Credit-report",
+}
+
 func TestBuildAnalysisPrompt_NoExamples(t *testing.T) {
 	msg := MessageData{
 		Sender:      "deals@shop.com",
@@ -16,14 +37,12 @@ func TestBuildAnalysisPrompt_NoExamples(t *testing.T) {
 	sys, user := BuildAnalysisPrompt(msg, nil)
 
 	checks := []string{
-		"Decide if this email has expired",
-		"STEP 1",
-		"STEP 2",
-		"STEP 3",
-		"isTimeSensitive",
+		"Extract any hard deadline",
+		"Hard deadlines",
+		"NOT hard deadlines",
 		"expiresAt",
 		"confidence",
-		"When in doubt, prefer false negatives",
+		"Prefer null over a low-confidence extraction",
 	}
 	for _, c := range checks {
 		if !strings.Contains(sys, c) {
@@ -42,6 +61,28 @@ func TestBuildAnalysisPrompt_NoExamples(t *testing.T) {
 	}
 }
 
+func TestBuildAnalysisPrompt_BannedPhrases(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildAnalysisPrompt(msg, nil)
+
+	for _, banned := range bannedPhrases {
+		if strings.Contains(sys, banned) {
+			t.Errorf("systemPrompt contains banned phrase %q (regression guard)", banned)
+		}
+	}
+}
+
+func TestBuildAnalysisPrompt_NegativeExamples(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildAnalysisPrompt(msg, nil)
+
+	for _, ex := range negativeExamples {
+		if !strings.Contains(sys, ex) {
+			t.Errorf("systemPrompt missing negative example %q", ex)
+		}
+	}
+}
+
 func TestBuildAnalysisPrompt_WithExamples(t *testing.T) {
 	msg := MessageData{
 		Sender:   "noreply@airline.com",
@@ -55,7 +96,7 @@ func TestBuildAnalysisPrompt_WithExamples(t *testing.T) {
 
 	sys, user := BuildAnalysisPrompt(msg, examples)
 
-	if !strings.Contains(sys, "user has confirmed these emails were time-sensitive") {
+	if !strings.Contains(sys, "user has confirmed these emails contained hard deadlines") {
 		t.Error("systemPrompt missing examples section header")
 	}
 	if !strings.Contains(sys, "a@b.com") {
@@ -68,11 +109,9 @@ func TestBuildAnalysisPrompt_WithExamples(t *testing.T) {
 		t.Error("systemPrompt missing expiresAt from example")
 	}
 
-	// userContent has sender/subject
 	if !strings.Contains(user, "noreply@airline.com") {
 		t.Error("userContent missing sender")
 	}
-	// No body snippet → fallback message
 	if !strings.Contains(user, "Body content not provided") {
 		t.Error("userContent missing body fallback")
 	}
@@ -83,15 +122,14 @@ func TestBuildAnalysisPrompt_ExamplesSlicedToFive(t *testing.T) {
 	var examples []TrainingRef
 	for i := 0; i < 8; i++ {
 		examples = append(examples, TrainingRef{
-			Sender:  "s@s.com",
-			Subject: "example",
+			Sender:   "s@s.com",
+			Subject:  "example",
 			SentDate: "2024-01-01",
 		})
 	}
 
 	sys, _ := BuildAnalysisPrompt(msg, examples)
 
-	// Should reference at most 5 numbered examples
 	if strings.Contains(sys, "6.") {
 		t.Error("systemPrompt included more than 5 examples")
 	}
@@ -102,7 +140,7 @@ func TestBuildAnalysisPrompt_CustomPrompt(t *testing.T) {
 		Sender:       "x@x.com",
 		Subject:      "hi",
 		SentDate:     "2024-06-01T00:00:00Z",
-		CustomPrompt: "Always mark as expired if from this domain.",
+		CustomPrompt: "Treat anything from this domain as time-sensitive.",
 	}
 
 	sys, _ := BuildAnalysisPrompt(msg, nil)
@@ -110,78 +148,80 @@ func TestBuildAnalysisPrompt_CustomPrompt(t *testing.T) {
 	if !strings.Contains(sys, "Additional user-provided guidelines") {
 		t.Error("systemPrompt missing custom prompt section")
 	}
-	if !strings.Contains(sys, "Always mark as expired if from this domain.") {
+	if !strings.Contains(sys, "Treat anything from this domain as time-sensitive.") {
 		t.Error("systemPrompt missing custom prompt content")
 	}
 }
 
-func TestBuildClassificationPrompt_NoExamples(t *testing.T) {
-	msg := MessageData{
-		Sender:   "receipts@amazon.com",
-		Subject:  "Your order has been placed",
-		SentDate: "2024-04-10T12:00:00Z",
-		Category: "receipt",
-	}
+func TestBuildMultiClassificationPrompt_BannedPhrases(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildMultiClassificationPrompt(msg, []string{"promotion"}, nil)
 
-	sys, user := BuildClassificationPrompt(msg, nil)
-
-	checks := []string{
-		"email classifier",
-		"matches",
-		"confidence",
-		"Prefer false negatives",
-	}
-	for _, c := range checks {
-		if !strings.Contains(sys, c) {
-			t.Errorf("systemPrompt missing %q", c)
+	for _, banned := range bannedPhrases {
+		if strings.Contains(sys, banned) {
+			t.Errorf("systemPrompt contains banned phrase %q (regression guard)", banned)
 		}
-	}
-	if !strings.Contains(sys, "receipt") {
-		t.Error("systemPrompt missing category description")
-	}
-
-	if !strings.Contains(user, "receipts@amazon.com") {
-		t.Error("userContent missing sender")
-	}
-	if !strings.Contains(user, "Your order has been placed") {
-		t.Error("userContent missing subject")
 	}
 }
 
-func TestBuildClassificationPrompt_WithExamples(t *testing.T) {
-	msg := MessageData{
-		Sender:   "billing@service.com",
-		Subject:  "Invoice #1234",
-		SentDate: "2024-05-01T00:00:00Z",
-		Category: "receipt",
+func TestBuildMultiClassificationPrompt_NegativeExamples(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildMultiClassificationPrompt(msg, []string{"promotion", "notification"}, nil)
+
+	for _, ex := range negativeExamples {
+		if !strings.Contains(sys, ex) {
+			t.Errorf("systemPrompt missing negative example %q", ex)
+		}
 	}
+}
+
+func TestBuildMultiClassificationPrompt_SchemaShape(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildMultiClassificationPrompt(msg, []string{"promotion"}, nil)
+
+	required := []string{
+		"\"category\":",
+		"\"expiresAt\":",
+		"\"confidence\":",
+		"\"reason\":",
+	}
+	for _, r := range required {
+		if !strings.Contains(sys, r) {
+			t.Errorf("schema example missing %q", r)
+		}
+	}
+	if strings.Contains(sys, "\"expired\":") {
+		t.Error("schema example still contains the dropped \"expired\" boolean field")
+	}
+}
+
+func TestBuildMultiClassificationPrompt_SingleCategory(t *testing.T) {
+	// Per decision 1A: scanner always uses this prompt even when only one
+	// llm-classify rule is enabled. Verify it renders cleanly.
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
+	sys, _ := BuildMultiClassificationPrompt(msg, []string{"promotion"}, nil)
+
+	if !strings.Contains(sys, "\"promotion\":") {
+		t.Error("single-category prompt missing the category line")
+	}
+	if !strings.Contains(sys, "Hard deadlines") {
+		t.Error("single-category prompt missing deadline-extraction section")
+	}
+}
+
+func TestBuildMultiClassificationPrompt_WithExamples(t *testing.T) {
+	msg := MessageData{Sender: "x@x.com", Subject: "hi", SentDate: "2024-01-01T00:00:00Z"}
 	examples := []TrainingRef{
 		{Sender: "shop@store.com", Subject: "Order confirmed"},
 		{Sender: "pay@pay.com", Subject: "Payment receipt"},
 	}
 
-	sys, _ := BuildClassificationPrompt(msg, examples)
+	sys, _ := BuildMultiClassificationPrompt(msg, []string{"receipt"}, examples)
 
-	if !strings.Contains(sys, "user has confirmed these emails are receipts") {
-		t.Error("systemPrompt missing classification examples header")
+	if !strings.Contains(sys, "user has confirmed these emails belong to various categories") {
+		t.Error("systemPrompt missing examples header")
 	}
 	if !strings.Contains(sys, "shop@store.com") {
 		t.Error("systemPrompt missing example sender")
-	}
-}
-
-func TestBuildClassificationPrompt_UnknownCategory(t *testing.T) {
-	msg := MessageData{
-		Sender:   "x@x.com",
-		Subject:  "hi",
-		SentDate: "2024-01-01T00:00:00Z",
-		Category: "newsletter",
-	}
-
-	sys, _ := BuildClassificationPrompt(msg, nil)
-
-	// Unknown category falls back to the raw category string in the description
-	if !strings.Contains(sys, "newsletter") {
-		t.Error("systemPrompt missing unknown category fallback")
 	}
 }

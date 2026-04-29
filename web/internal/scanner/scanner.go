@@ -46,6 +46,8 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 		return fmt.Errorf("scanner: get enabled rules: %w", err)
 	}
 
+	expiredFolder := s.canonicalExpiredFolder()
+
 	var since time.Time
 	if s.LookbackDays > 0 {
 		since = time.Now().Add(-time.Duration(s.LookbackDays) * 24 * time.Hour)
@@ -91,7 +93,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 			}
 
 			log.Printf("scanner: [%d/%d] evaluating %q from %s", i+1, len(msgs), msg.Subject, msg.Sender)
-			verdict, err := s.evaluateMessage(ctx, client, &msg, enabledRules)
+			verdict, err := s.evaluateMessage(ctx, client, &msg, enabledRules, expiredFolder)
 			if err != nil {
 				log.Printf("scanner: evaluate message %q: %v", msg.MessageID, err)
 				continue
@@ -204,9 +206,36 @@ func extractOriginalSender(headers map[string][]string) string {
 	return ""
 }
 
+// minExpiryConfidence is the threshold below which an LLM-extracted expiresAt
+// is rejected as likely hallucinated. Matches the auto-execute confidence
+// threshold for verdicts (scanner.go ScanAccount: confidence >= 0.7).
+const minExpiryConfidence = 0.7
+
+// canonicalExpiredFolder returns the IMAP folder name configured as the
+// canonical "Expired" destination, or empty string if none is configured.
+// Looked up from db.GetCategories() (the "expired" category id).
+func (s *Scanner) canonicalExpiredFolder() string {
+	cats, err := s.db.GetCategories()
+	if err != nil {
+		log.Printf("scanner: get categories for expired folder lookup: %v", err)
+		return ""
+	}
+	for _, c := range cats {
+		if c.ID == "expired" {
+			return c.FolderName
+		}
+	}
+	return ""
+}
+
 // evaluateMessage runs a message against all enabled rules (sorted by priority)
 // and returns the first matching verdict, or nil if no rule matches.
-func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, enabledRules []db.Rule) (*rules.RuleVerdict, error) {
+//
+// expiredFolder is the canonical Expired destination resolved at scan-cycle
+// start. When an LLM-extracted deadline is in the past, the verdict routes
+// here regardless of which rule was iterated — fixes the prior bug where a
+// past-deadline notification ended up in the Notifications folder.
+func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, enabledRules []db.Rule, expiredFolder string) (*rules.RuleVerdict, error) {
 	ruleMsg := &rules.Message{
 		Author:         msg.Sender,
 		OriginalSender: extractOriginalSender(msg.Headers),
@@ -280,7 +309,7 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 			if strings.ToLower(s.cfg.LLM.Provider) == "none" {
 				continue
 			}
-			v, err := s.evaluateLLM(ctx, client, msg, rule, false)
+			v, err := s.evaluateLLM(ctx, client, msg, rule, expiredFolder)
 			if err != nil {
 				log.Printf("scanner: llm eval for %q rule %q: %v", msg.MessageID, rule.Name, err)
 				continue
@@ -294,9 +323,11 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 				continue
 			}
 
-			// Batch: on the first llm-classify rule, run one multi-classify
-			// call for ALL llm-classify categories at once.
-			if !multiClassifyDone && len(classifyRules) > 1 {
+			// On the first matching llm-classify rule, run ONE multi-classify
+			// call covering every llm-classify category configured. Batches
+			// even the single-category case (per design decision 1A — keeps
+			// the deadline-extraction logic in a single prompt path).
+			if !multiClassifyDone && len(classifyRules) >= 1 {
 				multiClassifyDone = true
 				result, err := s.evaluateMultiClassify(ctx, client, msg, classifyRules)
 				if err != nil {
@@ -306,56 +337,15 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 				}
 			}
 
-			// If we did a batch call, check its result.
-			if multiClassifyResult != nil {
-				// If the LLM detected expiry, prefer that over classification.
-				if multiClassifyResult.IsTimeSensitive && multiClassifyResult.ExpiresAt != "" {
-					expiresAt, expired := parseExpiresAt(multiClassifyResult.ExpiresAt)
-					if expiresAt != nil {
-						v := &rules.RuleVerdict{
-							Expired:    expired,
-							ExpiresAt:  expiresAt,
-							Rule:       rule, // use current rule for destination
-							Reason:     multiClassifyResult.Reason,
-							Confidence: multiClassifyResult.Confidence,
-						}
-						if !expired {
-							// Future expiry — also classify so it lands in the right folder now.
-							matchedCat := strings.ToLower(multiClassifyResult.Category)
-							if matchedCat != "" && matchedCat != "none" {
-								if matchedRule, ok := classifyRulesByCategory[matchedCat]; ok {
-									v.Classified = true
-									v.Rule = matchedRule
-								}
-							}
-						}
-						return v, nil
-					}
-				}
-
-				matchedCat := strings.ToLower(multiClassifyResult.Category)
-				if matchedCat != "" && matchedCat != "none" && multiClassifyResult.Confidence > 0 {
-					if matchedRule, ok := classifyRulesByCategory[matchedCat]; ok {
-						return &rules.RuleVerdict{
-							Classified: true,
-							Rule:       matchedRule,
-							Reason:     multiClassifyResult.Reason,
-							Confidence: multiClassifyResult.Confidence,
-						}, nil
-					}
-				}
-				continue // skip individual call — batch already answered
-			}
-
-			// Fallback: single-rule classify (only if batch wasn't used).
-			v, err := s.evaluateLLM(ctx, client, msg, rule, true)
-			if err != nil {
-				log.Printf("scanner: llm-classify eval for %q rule %q: %v", msg.MessageID, rule.Name, err)
+			if multiClassifyResult == nil {
 				continue
 			}
+
+			v := buildClassifyVerdict(multiClassifyResult, rule, classifyRulesByCategory, expiredFolder)
 			if v != nil {
 				return v, nil
 			}
+			continue // batch already answered for this message
 		}
 	}
 
@@ -363,8 +353,11 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 }
 
 // parseExpiresAt parses an expiry date string and returns the time and whether
-// it's already in the past.
+// it's already in the past. Returns nil if the string is empty or unparseable.
 func parseExpiresAt(s string) (*time.Time, bool) {
+	if s == "" {
+		return nil, false
+	}
 	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
 		t, err := time.Parse(layout, s)
 		if err == nil {
@@ -372,6 +365,78 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 		}
 	}
 	return nil, false
+}
+
+// extractValidExpiresAt parses the LLM-returned ExpiresAt and applies the
+// confidence guard (decision 3A — reject low-confidence extractions as
+// likely hallucinated). Returns the parsed time, whether it is in the past,
+// and a "valid" flag that is false when the input was empty, unparseable,
+// or rejected by the confidence threshold.
+func extractValidExpiresAt(expiresAt string, confidence float64) (parsed *time.Time, past bool, valid bool) {
+	if expiresAt == "" {
+		return nil, false, false
+	}
+	if confidence < minExpiryConfidence {
+		log.Printf("scanner: dropping LLM expiresAt=%q with confidence=%.2f below %.2f threshold (likely hallucination)",
+			expiresAt, confidence, minExpiryConfidence)
+		return nil, false, false
+	}
+	t, isPast := parseExpiresAt(expiresAt)
+	if t == nil {
+		return nil, false, false
+	}
+	return t, isPast, true
+}
+
+// buildClassifyVerdict turns a multi-classify LLM response into a rule
+// verdict, applying the routing rules from the expiry redesign:
+//
+//   - Past extracted deadline → expired verdict, routed to canonical Expired
+//     folder (NOT the iterated rule's destination — fixes the prior bug).
+//   - Future extracted deadline + matched category → classified verdict
+//     for that category's rule, with ExpiresAt persisted so
+//     SweepDeferredExpiries can pick it up later.
+//   - No extracted deadline + matched category → plain classified verdict.
+//   - No category match → returns nil so other rules can have a chance.
+//
+// The currentRule is used only for logging/reason context; routing always
+// uses either the matched category's rule or the canonical Expired folder.
+func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCategory map[string]db.Rule, expiredFolder string) *rules.RuleVerdict {
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence)
+
+	if hasDeadline && past {
+		expiredRule := currentRule
+		if expiredFolder != "" {
+			expiredRule.DestinationFolder = expiredFolder
+		}
+		return &rules.RuleVerdict{
+			Expired:    true,
+			ExpiresAt:  expiresAt,
+			Rule:       expiredRule,
+			Reason:     result.Reason,
+			Confidence: result.Confidence,
+		}
+	}
+
+	matchedCat := strings.ToLower(result.Category)
+	if matchedCat == "" || matchedCat == "none" || result.Confidence <= 0 {
+		return nil
+	}
+	matchedRule, ok := byCategory[matchedCat]
+	if !ok {
+		return nil
+	}
+
+	v := &rules.RuleVerdict{
+		Classified: true,
+		Rule:       matchedRule,
+		Reason:     result.Reason,
+		Confidence: result.Confidence,
+	}
+	if hasDeadline && !past {
+		v.ExpiresAt = expiresAt
+	}
+	return v
 }
 
 // evaluateMultiClassify runs a single LLM call that classifies a message into
@@ -423,10 +488,17 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 	return result, nil
 }
 
-// evaluateLLM handles both "llm" and "llm-classify" rule types using the cache.
-// classify=true means llm-classify; classify=false means llm (expiry).
-func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, rule db.Rule, classify bool) (*rules.RuleVerdict, error) {
-	// Check cache first.
+// evaluateLLM handles "llm" rule types (deadline-only extraction). It uses
+// the cache to avoid re-asking about previously-seen messages, then applies
+// the same past/future + confidence-guard logic as the multi-classify path.
+//
+// Returns:
+//   - past extracted deadline → expired verdict routed to canonical Expired folder
+//   - future extracted deadline → nil (the `llm` rule type has no category to
+//     park the message under; the next scan with a then-past deadline will
+//     re-evaluate from cache and produce the verdict)
+//   - no deadline → nil
+func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, rule db.Rule, expiredFolder string) (*rules.RuleVerdict, error) {
 	cached, err := s.db.GetCachedVerdict(msg.MessageID)
 	if err != nil {
 		return nil, fmt.Errorf("get cached verdict: %w", err)
@@ -434,16 +506,13 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 
 	var result *llm.LLMResponse
 	if cached != nil {
-		// Reconstruct an LLMResponse from the cache.
 		result = &llm.LLMResponse{
-			IsTimeSensitive: cached.IsTimeSensitive,
-			ExpiresAt:       cached.ExpiresAt,
-			Reason:          cached.Reason,
-			Confidence:      cached.Confidence,
-			Matches:         cached.Classified,
+			ExpiresAt:  cached.ExpiresAt,
+			Reason:     cached.Reason,
+			Confidence: cached.Confidence,
+			Matches:    cached.Classified,
 		}
 	} else {
-		// Cache miss — fetch body (truncated to 2000 chars), build prompt, call LLM.
 		body, fetchErr := client.FetchBody(msg.Folder, msg.UID)
 		if fetchErr != nil {
 			log.Printf("scanner: llm fetch body uid=%d: %v", msg.UID, fetchErr)
@@ -453,12 +522,11 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 			body = body[:2000]
 		}
 
-		var trainingExamples []db.TrainingExample
 		category := rule.ExpirationConfig.Category
 		if category == "" {
 			category = "expiry"
 		}
-		trainingExamples, err = s.db.GetTrainingExamples(category)
+		trainingExamples, err := s.db.GetTrainingExamples(category)
 		if err != nil {
 			log.Printf("scanner: get training examples: %v", err)
 		}
@@ -480,77 +548,38 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 			Category:     rule.ExpirationConfig.Category,
 		}
 
-		var systemPrompt, userContent string
-		if classify {
-			systemPrompt, userContent = llm.BuildClassificationPrompt(msgData, refs)
-		} else {
-			systemPrompt, userContent = llm.BuildAnalysisPrompt(msgData, refs)
-		}
+		systemPrompt, userContent := llm.BuildAnalysisPrompt(msgData, refs)
 
 		result, err = llm.CallLLM(ctx, &s.cfg.LLM, systemPrompt, userContent)
 		if err != nil {
-			// Cache error result and return.
 			_ = s.db.SetCachedVerdict(msg.MessageID, db.CachedVerdict{Error: err.Error()})
 			return nil, fmt.Errorf("call llm: %w", err)
 		}
 
-		// Cache successful result.
 		cv := db.CachedVerdict{
-			IsTimeSensitive: result.IsTimeSensitive,
-			ExpiresAt:       result.ExpiresAt,
-			Reason:          result.Reason,
-			Confidence:      result.Confidence,
-			Classified:      result.Matches,
-		}
-		if classify {
-			cv.Classified = result.Matches
-		} else {
-			cv.Expired = result.IsTimeSensitive
+			ExpiresAt:  result.ExpiresAt,
+			Reason:     result.Reason,
+			Confidence: result.Confidence,
 		}
 		if err := s.db.SetCachedVerdict(msg.MessageID, cv); err != nil {
 			log.Printf("scanner: cache verdict for %q: %v", msg.MessageID, err)
 		}
 	}
 
-	if classify {
-		if result.Matches {
-			return &rules.RuleVerdict{
-				Classified: true,
-				Rule:       rule,
-				Reason:     result.Reason,
-				Confidence: result.Confidence,
-			}, nil
-		}
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence)
+	if !hasDeadline || !past {
 		return nil, nil
 	}
 
-	// llm (expiry) — check if expired.
-	if !result.IsTimeSensitive || result.ExpiresAt == "" {
-		return nil, nil
+	expiredRule := rule
+	if expiredFolder != "" {
+		expiredRule.DestinationFolder = expiredFolder
 	}
-
-	var expiresAt time.Time
-	var parseErr error
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
-		expiresAt, parseErr = time.Parse(layout, result.ExpiresAt)
-		if parseErr == nil {
-			break
-		}
-	}
-	if parseErr != nil {
-		return nil, nil
-	}
-
-	if time.Now().After(expiresAt) {
-		t := expiresAt
-		return &rules.RuleVerdict{
-			Expired:    true,
-			Rule:       rule,
-			ExpiresAt:  &t,
-			Reason:     result.Reason,
-			Confidence: result.Confidence,
-		}, nil
-	}
-
-	return nil, nil
+	return &rules.RuleVerdict{
+		Expired:    true,
+		Rule:       expiredRule,
+		ExpiresAt:  expiresAt,
+		Reason:     result.Reason,
+		Confidence: result.Confidence,
+	}, nil
 }

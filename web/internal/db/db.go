@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -216,6 +217,11 @@ func (d *DB) migrate() error {
 			id          TEXT PRIMARY KEY,
 			declined_at TIMESTAMP
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS schema_meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT
+		)`,
 	}
 
 	for _, stmt := range stmts {
@@ -224,5 +230,46 @@ func (d *DB) migrate() error {
 		}
 	}
 
+	if err := d.applyOneShotMigrations(); err != nil {
+		return fmt.Errorf("apply one-shot migrations: %w", err)
+	}
+
+	return nil
+}
+
+// applyOneShotMigrations runs idempotent data migrations that should only
+// take effect once per database. The schema_meta table tracks which have
+// already run.
+func (d *DB) applyOneShotMigrations() error {
+	type oneShot struct {
+		key string
+		stmt string
+	}
+	migrations := []oneShot{
+		// 2026-04-29 expiry redesign: the multi-classify and analysis prompts
+		// changed shape. Cached verdicts written before this change carry a
+		// now-meaningless "expired" boolean. Flush the cache so the next scan
+		// repopulates it under the new schema. See design doc:
+		// ~/.gstack/projects/kraftbj-mailreaper/kraft-web-rewrite-design-20260429-081906.md
+		{key: "v2_expiry_redesign_cache_flush", stmt: `DELETE FROM llm_cache`},
+	}
+
+	for _, m := range migrations {
+		var existing string
+		err := d.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, m.key).Scan(&existing)
+		if err == nil {
+			continue // already applied
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check schema_meta %q: %w", m.key, err)
+		}
+
+		if _, err := d.Exec(m.stmt); err != nil {
+			return fmt.Errorf("run migration %q: %w", m.key, err)
+		}
+		if _, err := d.Exec(`INSERT INTO schema_meta (key, value) VALUES (?, ?)`, m.key, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("record migration %q: %w", m.key, err)
+		}
+	}
 	return nil
 }

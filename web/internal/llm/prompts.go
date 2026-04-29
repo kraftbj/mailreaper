@@ -24,8 +24,9 @@ type TrainingRef struct {
 	ExpiresAt string
 }
 
-// BuildAnalysisPrompt returns a (systemPrompt, userContent) pair for determining
-// whether an email has expired. It mirrors the JS buildAnalysisPrompt logic.
+// BuildAnalysisPrompt returns a (systemPrompt, userContent) pair for extracting
+// any explicit hard deadline from an email. The LLM does NOT decide whether
+// the deadline has passed — that comparison is done in Go after the response.
 func BuildAnalysisPrompt(msg MessageData, examples []TrainingRef) (systemPrompt, userContent string) {
 	now := time.Now().UTC()
 	currentTime := now.Format(time.RFC3339)
@@ -38,19 +39,16 @@ func BuildAnalysisPrompt(msg MessageData, examples []TrainingRef) (systemPrompt,
 		sentDateReadable = msg.SentDate
 	}
 
-	// Body section
 	bodySection := "\n(Body content not provided — analyze based on metadata only)"
 	if msg.BodySnippet != "" {
 		bodySection = fmt.Sprintf("\nContent snippet:\n---\n%s\n---", msg.BodySnippet)
 	}
 
-	// Custom prompt section
 	customSection := ""
 	if msg.CustomPrompt != "" {
 		customSection = fmt.Sprintf("\n\nAdditional user-provided guidelines (these take priority):\n%s", msg.CustomPrompt)
 	}
 
-	// Examples section — up to 5 most recent
 	examplesSection := ""
 	if len(examples) > 0 {
 		recent := examples
@@ -66,47 +64,56 @@ func BuildAnalysisPrompt(msg MessageData, examples []TrainingRef) (systemPrompt,
 			lines = append(lines, line)
 		}
 		examplesSection = fmt.Sprintf(
-			"\n\nThe user has confirmed these emails were time-sensitive and expired:\n%s\n\nUse these as reference — similar emails should be treated as time-sensitive.",
+			"\n\nThe user has confirmed these emails contained hard deadlines:\n%s\n\nUse these as reference — similar emails likely contain hard deadlines.",
 			strings.Join(lines, "\n"),
 		)
 	}
 
-	systemPrompt = fmt.Sprintf(`Decide if this email has expired. Follow the steps below.
+	systemPrompt = fmt.Sprintf(`Extract any hard deadline from this email.
 
-TODAY is %s (%s).
+TODAY is %s (%s). The email was sent on %s.
 %s
-STEP 1: Does the email contain a deadline, event date, or expiration?
-Look for: dates, times, "ends tonight", "ends at midnight", "today only", "last chance", "expires", "final hours", appointment times, event times, check-in times, verification codes.
+A hard deadline is an explicit date/time in the email after which the
+message has zero remaining value.
 
-STEP 2: What is the expiration date/time?
-- If "ends tonight", "ends at midnight", "today only", "last chance", "final hours" → midnight on the SEND DATE (%s).
-- If a specific date/time is mentioned → use that date/time.
-- If "appointment" or "event" with a date → the event date/time.
-- If verification code, OTP, magic link → 1 hour after send date.
-- If shipping "out for delivery", "arriving today" → 24 hours after send date.
-- If transit alert, delay, disruption → 3 hours after send date.
+Hard deadlines (extract these as expiresAt):
+- Sale-end dates ("sale ends Friday", "today only", "ends tonight",
+  "last chance", "final hours", "expires at midnight") — use midnight on
+  the SEND DATE if no explicit time is given.
+- RSVP-by deadlines for events.
+- Specific appointment or event start times.
+- OTP / verification code validity windows — use 1 hour after send.
+- Transit / flight delay alerts — use 3 hours after send.
+- "Out for delivery" / "arriving today" — use 24 hours after send.
 
-STEP 3: Is the expiration date BEFORE today (%s)?
-If yes → isTimeSensitive: true, and set expiresAt.
-
-NOT time-sensitive (always set isTimeSensitive: false):
-- Newsletters, digests, informational content.
+NOT hard deadlines (always return expiresAt: null):
+- Newsletter or article publication dates.
+- Transaction, purchase, receipt, or billing timestamps.
+- "Delivered on" / "shipped on" / "your package arrived on" stamps.
+- "Added you on LinkedIn on …" or other social-network activity timestamps.
+- "Member request" / "approval needed" notifications (still actionable
+  regardless of age).
+- Daily digests (USPS Informed Delivery, GitHub digests, Basecamp
+  digests) — even when older.
+- "Memories from N years ago" emails.
+- Credit-report or account-status change notifications.
+- Software release / changelog announcements (e.g. tz database releases).
 - Personal correspondence.
-- Receipts, order confirmations, billing statements.
+
+Do NOT decide whether the deadline has already passed — that comparison
+happens elsewhere. Only extract the date string.
 
 Respond ONLY with JSON:
 {
-  "isTimeSensitive": true/false,
   "expiresAt": "ISO-8601 datetime or null",
   "reason": "brief explanation",
   "confidence": 0.0 to 1.0
 }
 
-When in doubt, prefer false negatives.%s`,
+Prefer null over a low-confidence extraction.%s`,
 		currentDateReadable, currentTime,
-		examplesSection,
 		sentDateReadable,
-		currentDateReadable,
+		examplesSection,
 		customSection,
 	)
 
@@ -196,18 +203,10 @@ var categoryGuidelines = map[string]string{
 - Prefer false negatives over false positives — when in doubt, say false.`,
 }
 
-// MultiClassifyResponse holds the parsed result from a multi-category classification call.
-type MultiClassifyResponse struct {
-	Category   string  `json:"category"`
-	Reason     string  `json:"reason"`
-	Confidence float64 `json:"confidence"`
-	Expired    bool    `json:"expired"`
-	ExpiresAt  string  `json:"expiresAt"`
-}
-
 // BuildMultiClassificationPrompt builds a single prompt that asks the LLM to
-// classify an email into one of several categories (or "none"). This replaces
-// N separate classify calls with a single one.
+// (1) classify an email into one of several categories (or "none") and
+// (2) extract any hard deadline string. The LLM does NOT decide whether the
+// deadline has passed — that comparison is done in Go after the response.
 func BuildMultiClassificationPrompt(msg MessageData, categories []string, examples []TrainingRef) (systemPrompt, userContent string) {
 	now := time.Now().UTC()
 	currentDate := now.Format("Monday, January 2, 2006")
@@ -255,22 +254,50 @@ func BuildMultiClassificationPrompt(msg MessageData, categories []string, exampl
 		)
 	}
 
-	systemPrompt = fmt.Sprintf(`You are an email classifier. Do TWO things:
+	systemPrompt = fmt.Sprintf(`You are an email classifier. Do TWO independent tasks:
 
 1. CLASSIFY this email into exactly ONE of the following categories, or "none":
 
 Categories:
 %s
 
-2. CHECK if this email has EXPIRED. TODAY is %s (%s). The email was sent on %s.
-Look for: event dates, RSVP deadlines, meeting times, "ends tonight", "today only", "last chance", sale end dates, appointment times. If ANY date/time in the email is BEFORE today, it is expired.
+2. EXTRACT any hard deadline. TODAY is %s (%s). The email was sent on %s.
+
+A hard deadline is an explicit date/time in the email after which the
+message has zero remaining value.
+
+Hard deadlines (extract these as expiresAt):
+- Sale-end dates ("sale ends Friday", "today only", "ends tonight",
+  "last chance", "final hours", "expires at midnight") — use midnight on
+  the SEND DATE if no explicit time is given.
+- RSVP-by deadlines for events.
+- Specific appointment or event start times.
+- OTP / verification code validity windows — use 1 hour after send.
+- Transit / flight delay alerts — use 3 hours after send.
+- "Out for delivery" / "arriving today" — use 24 hours after send.
+
+NOT hard deadlines (always return expiresAt: null even if dates appear):
+- Newsletter or article publication dates.
+- Transaction, purchase, receipt, or billing timestamps.
+- "Delivered on" / "shipped on" / "your package arrived on" stamps.
+- "Added you on LinkedIn on …" or other social-network activity timestamps.
+- "Member request" / "approval needed" notifications (still actionable
+  regardless of age).
+- Daily digests (USPS Informed Delivery, GitHub digests, Basecamp
+  digests) — even when older.
+- "Memories from N years ago" emails.
+- Credit-report or account-status change notifications.
+- Software release / changelog announcements (e.g. tz database releases).
+- Personal correspondence.
+
+Do NOT decide whether the deadline has already passed — that comparison
+happens elsewhere. Only extract the date string.
 %s
 Respond ONLY with a JSON object:
 {
   "category": "category_name or none",
   "reason": "brief 1-sentence explanation",
   "confidence": 0.0 to 1.0,
-  "expired": true/false,
   "expiresAt": "ISO-8601 datetime or null"
 }
 
@@ -278,15 +305,13 @@ Important:
 - Pick the single BEST category. Do not force a match.
 - If the email requires immediate user action (e.g. unpaid invoice, verify account, approve request), return category "none".
 - Personal correspondence is always category "none".
-- A message can be BOTH classified (e.g. "notification") AND expired. Set both fields independently.
+- Category and expiresAt are independent. A "promotion" can have an expiresAt; a "notification" usually does not.
 - Prefer "none" over a low-confidence category match.
-- For expiry: if a date like "Sun 4/12" or "March 30" appears and is before today (%s), set expired=true.%s%s`,
+- Prefer null over a low-confidence expiresAt extraction.%s`,
 		strings.Join(catLines, "\n"),
 		currentDate, currentTime, sentDateReadable,
 		examplesSection,
-		currentDate,
 		customSection,
-		"",
 	)
 
 	sender := msg.Sender
@@ -325,86 +350,4 @@ var categoryDescriptions = map[string]string{
 	"notification": "an automated notification, status update, activity alert, system message, or transactional update that informs but requires no immediate action (e.g. shipping updates, app activity digests, service alerts, low-balance warnings, pharmacy notifications, social media activity summaries)",
 	"promotion":    "a marketing email, promotional offer, advertisement, sales pitch, discount offer, product announcement, or re-engagement email designed to get the recipient to buy something or re-engage with a service",
 	"hobbies":      "an email related to tabletop gaming, RPGs, miniatures, board games, Kickstarter/crowdfunding campaigns for games, painting, hobby crafting, or hobby-focused community content (e.g. Patreon posts from game creators, game store newsletters, RPG product releases)",
-}
-
-// BuildClassificationPrompt returns a (systemPrompt, userContent) pair for
-// determining whether an email matches a given category (e.g. receipt).
-func BuildClassificationPrompt(msg MessageData, examples []TrainingRef) (systemPrompt, userContent string) {
-	desc, ok := categoryDescriptions[msg.Category]
-	if !ok {
-		desc = msg.Category
-	}
-
-	// Custom prompt section
-	customSection := ""
-	if msg.CustomPrompt != "" {
-		customSection = fmt.Sprintf("\n\nAdditional user-provided guidelines (these take priority):\n%s", msg.CustomPrompt)
-	}
-
-	// Examples section — up to 5 most recent
-	examplesSection := ""
-	if len(examples) > 0 {
-		recent := examples
-		if len(recent) > 5 {
-			recent = recent[len(recent)-5:]
-		}
-		var lines []string
-		for i, ex := range recent {
-			lines = append(lines, fmt.Sprintf("%d. From: %s | Subject: %s", i+1, ex.Sender, ex.Subject))
-		}
-		examplesSection = fmt.Sprintf(
-			"\n\nThe user has confirmed these emails are %ss:\n%s\n\nUse these as reference when classifying the email below.",
-			msg.Category,
-			strings.Join(lines, "\n"),
-		)
-	}
-
-	guidelines := categoryGuidelines[msg.Category]
-	if guidelines == "" {
-		guidelines = "- Prefer false negatives over false positives — when in doubt, say false."
-	}
-
-	systemPrompt = fmt.Sprintf(`You are an email classifier. Determine if this email is %s.%s
-
-Respond ONLY with a JSON object:
-{
-  "matches": true/false,
-  "reason": "brief 1-sentence explanation",
-  "confidence": 0.0 to 1.0
-}
-
-Guidelines:
-%s%s`,
-		desc,
-		examplesSection,
-		guidelines,
-		customSection,
-	)
-
-	sender := msg.Sender
-	if sender == "" {
-		sender = "unknown"
-	}
-	subject := msg.Subject
-	if subject == "" {
-		subject = "(no subject)"
-	}
-
-	bodySection := "\n(Body content not provided — analyze based on metadata only)"
-	if msg.BodySnippet != "" {
-		bodySection = fmt.Sprintf("\nContent snippet:\n---\n%s\n---", msg.BodySnippet)
-	}
-
-	userContent = fmt.Sprintf(`Email metadata:
-- From: %s
-- Subject: %s
-- Sent: %s
-%s`,
-		sender,
-		subject,
-		msg.SentDate,
-		bodySection,
-	)
-
-	return systemPrompt, userContent
 }
