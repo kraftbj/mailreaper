@@ -160,8 +160,17 @@ func (c *Client) FetchNewMessages(folder string, since time.Time, maxAge time.Du
 	return results, nil
 }
 
-// FetchBody selects the given folder and returns the plain-text body of the
-// message identified by uid.
+/*
+FetchBody selects the given folder and returns the readable text body of the
+message identified by uid. The full RFC822 message is fetched (BODY.PEEK[], so
+the \Seen flag is left alone) and then reduced to text: MIME parts are walked,
+transfer encodings and charsets decoded, text/plain preferred over text/html,
+and markup stripped.
+
+Returning text rather than the raw message matters because callers truncate
+this to a short snippet for the LLM prompt. Raw messages start with several
+kilobytes of headers, so a truncated raw message is all headers and no prose.
+*/
 func (c *Client) FetchBody(folder string, uid uint32) (string, error) {
 	if _, err := c.client.Select(folder, nil).Wait(); err != nil {
 		return "", fmt.Errorf("imap: select %q: %w", folder, err)
@@ -184,7 +193,11 @@ func (c *Client) FetchBody(folder string, uid uint32) (string, error) {
 
 	for _, sec := range msgs[0].BodySection {
 		if sec.Section == nil || sec.Section.Specifier == imaplib.PartSpecifierNone {
-			return string(sec.Bytes), nil
+			text, err := extractTextBody(sec.Bytes)
+			if err != nil {
+				return "", fmt.Errorf("imap: extract body uid=%d in %q: %w", uid, folder, err)
+			}
+			return text, nil
 		}
 	}
 	return "", nil
