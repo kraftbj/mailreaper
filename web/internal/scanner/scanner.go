@@ -372,6 +372,19 @@ var zonelessExpiryLayouts = []string{
 // midnight expires the message a full day early.
 const dateOnlyExpiryLayout = "2006-01-02"
 
+// endOfDay returns 23:59:59 of the same calendar day as t, in t's location.
+//
+// This must use AddDate, not a fixed Add(24*time.Hour - time.Second): a
+// fixed real-time duration is wrong across a DST transition. On a 23-hour
+// spring-forward day it overshoots onto the next calendar day; on a 25-hour
+// fall-back day it lands an hour before 23:59:59, expiring the message
+// early — the exact failure direction this codebase exists to prevent.
+// AddDate normalizes through the calendar and location instead, so it lands
+// on 23:59:59 of the same calendar day in both cases.
+func endOfDay(t time.Time) time.Time {
+	return t.AddDate(0, 0, 1).Add(-time.Second)
+}
+
 // parseExpiresAt parses an expiry date string and returns the time and whether
 // it's already in the past. Returns nil if the string is empty or unparseable.
 //
@@ -401,7 +414,7 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 	}
 
 	if t, err := time.ParseInLocation(dateOnlyExpiryLayout, s, time.Local); err == nil {
-		t = t.Add(24*time.Hour - time.Second)
+		t = endOfDay(t)
 		return &t, time.Now().After(t)
 	}
 

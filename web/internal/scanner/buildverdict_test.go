@@ -106,17 +106,50 @@ func TestParseExpiresAtLayouts(t *testing.T) {
 	}
 }
 
-// TestParseExpiresAtDateOnlyIsEndOfDay pins the semantics prompts.go asks
-// the model for: a bare date means the deadline lapses at the end of that
-// day, not at midnight when it begins.
-func TestParseExpiresAtDateOnlyIsEndOfDay(t *testing.T) {
-	got, _ := parseExpiresAt("2026-06-26")
-	if got == nil {
-		t.Fatal("parseExpiresAt(\"2026-06-26\") = nil, want a time")
+// TestEndOfDayAcrossDST pins the day-advance arithmetic parseExpiresAt uses
+// for date-only deadlines against real DST transitions. parseExpiresAt
+// itself always reads time.Local, so the process zone can't be forced
+// deterministically from within the test; instead this calls the endOfDay
+// helper directly against explicitly-constructed America/Chicago times,
+// which is deterministic regardless of the machine running the suite.
+//
+// A fixed Add(24*time.Hour - time.Second) is wrong here: on the 25-hour
+// fall-back day it lands an hour before 23:59:59 (expiring a date-only
+// deadline early — the exact failure direction this codebase exists to
+// prevent), and on the 23-hour spring-forward day it overshoots onto the
+// next calendar day. Confirmed by temporarily reverting endOfDay to that
+// formula: this test fails both cases; with the AddDate implementation it
+// passes both.
+func TestEndOfDayAcrossDST(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skip("tzdata unavailable: " + err.Error())
 	}
-	want := time.Date(2026, 6, 26, 23, 59, 59, 0, time.Local)
-	if !got.Equal(want) {
-		t.Errorf("got %s, want %s", got, want)
+
+	tests := []struct {
+		name     string
+		midnight time.Time
+		want     time.Time
+	}{
+		{
+			name:     "25-hour fall-back day",
+			midnight: time.Date(2026, 11, 1, 0, 0, 0, 0, chicago),
+			want:     time.Date(2026, 11, 1, 23, 59, 59, 0, chicago),
+		},
+		{
+			name:     "23-hour spring-forward day",
+			midnight: time.Date(2026, 3, 8, 0, 0, 0, 0, chicago),
+			want:     time.Date(2026, 3, 8, 23, 59, 59, 0, chicago),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := endOfDay(tt.midnight)
+			if !got.Equal(tt.want) {
+				t.Errorf("endOfDay(%s) = %s, want %s", tt.midnight, got, tt.want)
+			}
+		})
 	}
 }
 
