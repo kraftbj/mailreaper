@@ -143,12 +143,24 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 					log.Printf("scanner: could not resolve an \"expired\" category folder (missing or misconfigured); falling back to literal %q", dest)
 				}
 
-				if err := client.EnsureFolder(dest); err != nil {
-					log.Printf("scanner: ensure folder %q: %v", dest, err)
+				// The move is authoritative. On failure the verdict is saved
+				// as move_failed with no acted_at: dedup then skips it (so we
+				// do not re-spend an LLM call every scan), a retry pass can
+				// reclaim it, and DetectManualClassifications ignores the
+				// status so an ambiguous success -- MOVE succeeded, error
+				// returned anyway -- is not read back as a user filing.
+				moveErr := client.EnsureFolder(dest)
+				if moveErr == nil {
+					moveErr = client.MoveMessage(msg.Folder, msg.UID, dest)
 				}
-
-				if err := client.MoveMessage(msg.Folder, msg.UID, dest); err != nil {
-					log.Printf("scanner: move message %q to %q: %v", msg.MessageID, dest, err)
+				if moveErr != nil {
+					log.Printf("scanner: move %q to %q failed: %v; recording move_failed for retry", msg.MessageID, dest, moveErr)
+					v.Status = "move_failed"
+					v.DestinationFolder = dest
+					if err := s.db.SaveVerdict(v); err != nil {
+						log.Printf("scanner: save move_failed verdict for %q: %v", msg.MessageID, err)
+					}
+					continue
 				}
 
 				actedAt := time.Now().UTC()

@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ type mockMailClient struct {
 	movedMsgs      []string
 	inboxMsgIDs    []string
 	folderMessages map[string][]imappkg.FetchedMessage
+	moveErr        error // when set, MoveMessage fails without recording
 }
 
 func (m *mockMailClient) FetchNewMessages(folder string, since time.Time, maxAge time.Duration, limit int) ([]imappkg.FetchedMessage, error) {
@@ -23,6 +25,9 @@ func (m *mockMailClient) FetchNewMessages(folder string, since time.Time, maxAge
 }
 
 func (m *mockMailClient) MoveMessage(folder string, uid uint32, dest string) error {
+	if m.moveErr != nil {
+		return m.moveErr
+	}
 	m.movedMsgs = append(m.movedMsgs, dest)
 	return nil
 }
@@ -135,6 +140,76 @@ func TestScanCycleTTLRule(t *testing.T) {
 	}
 	if v.Status != "executed" {
 		t.Errorf("expected status %q, got %q", "executed", v.Status)
+	}
+}
+
+// TestScanCycleFailedMoveRecordsMoveFailed verifies that a failed IMAP move
+// is recorded as move_failed rather than executed. Recording executed is a
+// permanent lie -- the dedup check means the message is never reconsidered,
+// so the database disagrees with the mailbox forever. Recording nothing is
+// also wrong: it re-spends an LLM call on every subsequent scan.
+func TestScanCycleFailedMoveRecordsMoveFailed(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	rule := db.Rule{
+		ID:       "rule-ttl-test",
+		Name:     "OTP rule",
+		Enabled:  true,
+		Priority: 10,
+		MatchConfig: db.MatchConfig{
+			SubjectPatterns: []string{"*OTP*"},
+		},
+		ExpirationConfig: db.ExpirationConfig{
+			Type:  "ttl",
+			Hours: 2,
+		},
+		Action:            "move",
+		DestinationFolder: "Expired",
+	}
+	if err := database.SaveRule(rule); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<msg-1@test>",
+		Subject:   "Your OTP Code",
+		Sender:    "security@example.com",
+		Date:      time.Now().Add(-3 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	client := &mockMailClient{
+		messages: []imappkg.FetchedMessage{msg},
+		moveErr:  errors.New("IMAP MOVE failed: mailbox is read-only"),
+	}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("recorded %d move(s) despite MoveMessage failing", len(client.movedMsgs))
+	}
+
+	v, err := database.GetVerdictByMessageID("<msg-1@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("no verdict saved; the next scan will re-spend an LLM call on this message")
+	}
+	if v.Status != "move_failed" {
+		t.Errorf("Status = %q, want move_failed", v.Status)
+	}
+	if v.ActedAt != nil {
+		t.Error("ActedAt set despite the move failing")
 	}
 }
 
@@ -402,6 +477,98 @@ func TestDetectManualClassificationsSkipsExistingVerdicts(t *testing.T) {
 	}
 	if len(examples) != 0 {
 		t.Errorf("expected 0 training examples for already-verdicted message, got %d", len(examples))
+	}
+
+	// Activity log should be empty.
+	actLog, err := database.GetActivityLog(10)
+	if err != nil {
+		t.Fatalf("get activity log: %v", err)
+	}
+	if len(actLog) != 0 {
+		t.Errorf("expected 0 activity entries, got %d", len(actLog))
+	}
+}
+
+// TestDetectManualClassificationsIgnoresMoveFailed verifies that a message
+// sitting in a category folder with a move_failed verdict is not treated as
+// a manual placement. The move may have actually succeeded on the IMAP side
+// before the error was returned, so this is an ambiguous case, not proof of
+// a user filing -- it must not be laundered into training data.
+func TestDetectManualClassificationsIgnoresMoveFailed(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	cat := db.Category{
+		ID:         "cat-receipts",
+		Name:       "Receipts",
+		FolderName: "Folders/AI-Triage/Receipts",
+	}
+	if err := database.SaveCategory(cat); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+
+	// Pre-seed a move_failed verdict: MailReaper attempted this move and
+	// got an error back, but the message is sitting in the destination
+	// folder anyway (the ambiguous case).
+	now := time.Now().UTC()
+	if err := database.SaveVerdict(db.Verdict{
+		AccountID:         "acct1",
+		MessageIDHeader:   "<receipt-002@example.com>",
+		Subject:           "Your receipt",
+		Sender:            "no-reply@shop.com",
+		SentAt:            now.Add(-72 * time.Hour),
+		Status:            "move_failed",
+		DestinationFolder: "Folders/AI-Triage/Receipts",
+		Reason:            "matched classify rule",
+		Confidence:        0.9,
+		EvaluatedAt:       now,
+	}); err != nil {
+		t.Fatalf("save existing verdict: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       8,
+		MessageID: "<receipt-002@example.com>",
+		Subject:   "Your receipt",
+		Sender:    "no-reply@shop.com",
+		Date:      now.Add(-72 * time.Hour),
+		Folder:    "Folders/AI-Triage/Receipts",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Receipts": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	if err := s.DetectManualClassifications(client, "acct1"); err != nil {
+		t.Fatalf("DetectManualClassifications: %v", err)
+	}
+
+	// No training example should have been added for the ambiguous case.
+	examples, err := database.GetTrainingExamples(cat.ID)
+	if err != nil {
+		t.Fatalf("get training examples: %v", err)
+	}
+	if len(examples) != 0 {
+		t.Errorf("expected 0 training examples for move_failed message, got %d", len(examples))
+	}
+
+	// The verdict must remain move_failed, not be overwritten as manual.
+	v, err := database.GetVerdictByMessageID("<receipt-002@example.com>")
+	if err != nil {
+		t.Fatalf("get verdict: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected verdict, got nil")
+	}
+	if v.Status != "move_failed" {
+		t.Errorf("expected status to remain %q, got %q", "move_failed", v.Status)
 	}
 
 	// Activity log should be empty.

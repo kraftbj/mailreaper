@@ -119,6 +119,19 @@ func (s *Scanner) DetectManualClassifications(client MailClient, accountID strin
 				log.Printf("scanner: check verdict for %q: %v", msg.MessageID, err)
 				continue
 			}
+			if existing != nil && existing.Status == "move_failed" {
+				// A move_failed verdict means MailReaper attempted this
+				// exact move and got an error back, but the IMAP MOVE may
+				// have actually succeeded before the error was returned
+				// (an ambiguous outcome). A message sitting in this folder
+				// with a move_failed verdict is therefore not proof of a
+				// user placement -- do not launder an ambiguous failure
+				// into training data. Kept as its own explicit condition,
+				// not folded into the general "existing != nil" check
+				// below, so this guard survives future changes to how
+				// "already handled" is determined.
+				continue
+			}
 			if existing != nil {
 				// Already have a verdict — not a manual placement.
 				continue
