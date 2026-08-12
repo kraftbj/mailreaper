@@ -1244,8 +1244,13 @@ Replace `backfill.go:105-109`:
 			// so the cached verdict must go. The verdict row itself is left
 			// alone: the dedup check lives in ScanAccount, not
 			// evaluateMessage, so deleting it here bought nothing and left a
-			// hole that DetectFeedback misread as a user filing whenever the
+			// hole that DetectManualClassifications misread as a user filing whenever the
 			// evaluation below failed.
+			//
+			// NOTE: the misreading function is DetectManualClassifications
+			// (feedback.go), which treats a missing verdict as "the user filed
+			// this by hand". DetectFeedback is a different function that looks
+			// for previously-executed verdicts reappearing in the inbox.
 			if err := s.db.RemoveCachedVerdict(msg.MessageID); err != nil {
 				log.Printf("backfill: remove cached verdict for %q: %v", msg.MessageID, err)
 			}
