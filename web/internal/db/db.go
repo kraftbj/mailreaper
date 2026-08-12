@@ -243,6 +243,9 @@ func (d *DB) migrate() error {
 // take effect once per database. The schema_meta table tracks which have
 // already run.
 func (d *DB) applyOneShotMigrations() error {
+	// Exactly one of stmt or fn must be set; the loop below enforces this
+	// and errors out on either both-set or neither-set rather than silently
+	// running d.Exec("") and recording the migration as applied anyway.
 	type oneShot struct {
 		key  string
 		stmt string
@@ -292,12 +295,19 @@ func (d *DB) applyOneShotMigrations() error {
 			return fmt.Errorf("check schema_meta %q: %w", m.key, err)
 		}
 
-		if m.fn != nil {
+		switch {
+		case m.fn != nil && m.stmt != "":
+			return fmt.Errorf("migration %q: both stmt and fn set; exactly one is allowed", m.key)
+		case m.fn != nil:
 			if err := m.fn(d); err != nil {
 				return fmt.Errorf("run migration %q: %w", m.key, err)
 			}
-		} else if _, err := d.Exec(m.stmt); err != nil {
-			return fmt.Errorf("run migration %q: %w", m.key, err)
+		case m.stmt != "":
+			if _, err := d.Exec(m.stmt); err != nil {
+				return fmt.Errorf("run migration %q: %w", m.key, err)
+			}
+		default:
+			return fmt.Errorf("migration %q: neither stmt nor fn set", m.key)
 		}
 		if _, err := d.Exec(`INSERT INTO schema_meta (key, value) VALUES (?, ?)`, m.key, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("record migration %q: %w", m.key, err)

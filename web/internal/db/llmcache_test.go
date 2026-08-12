@@ -214,11 +214,22 @@ func TestOneShotMigrationIdempotency(t *testing.T) {
 }
 
 // TestLLMCacheCompositeKeyMigrationSafeOnFreshDB proves the v4 migration
-// no-ops against a database that already has the composite-key shape from
-// the base schema. Opening the same path twice runs applyOneShotMigrations
-// (and therefore migrateLLMCacheCompositeKey) a second time against an
-// already-correct table; an unconditional rebuild would either error or
-// silently destroy the second Open's own writes.
+// no-ops against a table that already has the composite-key shape *and
+// already holds data* -- the case that actually matters, since
+// applyOneShotMigrations runs after the base schema's CREATE TABLE block, so
+// migrateLLMCacheCompositeKey's probe is the only thing standing between an
+// already-correct table and an unconditional DROP/CREATE.
+//
+// Simply opening the same path twice does not exercise this: the second
+// Open's applyOneShotMigrations call finds the "v4_llm_cache_composite_key"
+// row already in schema_meta and skips the migration function entirely via
+// that short-circuit (db.go's `if err == nil { continue }`), so
+// migrateLLMCacheCompositeKey never runs a second time and the probe is
+// never exercised against real data. To force the probe to actually run
+// against a populated, already-new-shape table, this test deletes that
+// schema_meta row before reopening -- which is the only way to make
+// applyOneShotMigrations call the migration function again without also
+// reverting the table to the old shape.
 func TestLLMCacheCompositeKeyMigrationSafeOnFreshDB(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fresh.db")
@@ -228,8 +239,16 @@ func TestLLMCacheCompositeKeyMigrationSafeOnFreshDB(t *testing.T) {
 		t.Fatalf("first Open() error = %v", err)
 	}
 	cacheKey := "gemini:gemini-3.5-flash-lite|analysis"
-	if err := first.SetCachedVerdict("<fresh@example.com>", cacheKey, db.CachedVerdict{Reason: "seeded before second open"}); err != nil {
+	if err := first.SetCachedVerdict("<fresh@example.com>", cacheKey, db.CachedVerdict{Reason: "seeded before forced re-migration"}); err != nil {
 		t.Fatalf("seed cache entry: %v", err)
+	}
+
+	// Force applyOneShotMigrations to invoke migrateLLMCacheCompositeKey
+	// again on the next Open, against a table that is already the new shape
+	// AND already has the row seeded above. This is the scenario the probe
+	// exists for: a no-op that must not become a data-destroying rebuild.
+	if _, err := first.Exec(`DELETE FROM schema_meta WHERE key = ?`, "v4_llm_cache_composite_key"); err != nil {
+		t.Fatalf("clear v4 schema_meta marker: %v", err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first handle: %v", err)
@@ -243,10 +262,10 @@ func TestLLMCacheCompositeKeyMigrationSafeOnFreshDB(t *testing.T) {
 
 	got, err := second.GetCachedVerdict("<fresh@example.com>", cacheKey)
 	if err != nil {
-		t.Fatalf("GetCachedVerdict() after reopen error = %v", err)
+		t.Fatalf("GetCachedVerdict() after forced re-migration error = %v", err)
 	}
-	if got == nil || got.Reason != "seeded before second open" {
-		t.Errorf("entry lost across a second Open() on an already-fresh-shaped DB: %+v", got)
+	if got == nil || got.Reason != "seeded before forced re-migration" {
+		t.Errorf("entry lost when migrateLLMCacheCompositeKey re-ran against an already-correct, populated table: %+v", got)
 	}
 }
 
@@ -289,8 +308,13 @@ func TestLLMCacheCompositeKeyMigrationRebuildsOldShapeTable(t *testing.T) {
 	}
 	defer opened.Close()
 
-	// The pre-migration row must be gone: guessing a cache_key for it would
-	// risk serving one prompt path another's answer.
+	/* The row count here is expected to be 0, but it is not proof that v4
+	dropped the table: this DB's schema_meta is empty, so
+	v2_expiry_redesign_cache_flush ("DELETE FROM llm_cache") runs first and
+	empties the table regardless of what v4 does afterward. What actually
+	proves the rebuild happened is the round trip below -- the old-shape
+	table has no cache_key column, so SetCachedVerdict's composite-key
+	INSERT would fail with a "no such column" error if v4 had not run. */
 	var count int
 	if err := opened.QueryRow(`SELECT COUNT(*) FROM llm_cache`).Scan(&count); err != nil {
 		t.Fatalf("count llm_cache rows: %v", err)
@@ -299,7 +323,8 @@ func TestLLMCacheCompositeKeyMigrationRebuildsOldShapeTable(t *testing.T) {
 		t.Errorf("expected the pre-migration row to be dropped, found %d row(s)", count)
 	}
 
-	// The table must now accept composite-key reads and writes.
+	// The table must now accept composite-key reads and writes -- this is
+	// the assertion that actually proves the rebuild ran (see comment above).
 	cacheKey := "gemini:gemini-3.5-flash-lite|analysis"
 	if err := opened.SetCachedVerdict("<post-migration@example.com>", cacheKey, db.CachedVerdict{Reason: "post-migration"}); err != nil {
 		t.Fatalf("SetCachedVerdict() after migration: %v", err)

@@ -827,3 +827,81 @@ func TestMultiClassifyCacheHitReconstructsCategory(t *testing.T) {
 		t.Errorf("movedMsgs = %v, want a single move to Folders/AI-Triage/Promotions -- the cached Category was not reconstructed", client.movedMsgs)
 	}
 }
+
+// TestMultiClassifyCachesErrorForBackoff proves the classify path backs off
+// for the 10-minute error TTL instead of re-asking the LLM every scan when
+// it fails. A message that never classifies produces no verdict (see
+// evaluateMessage's "llm-classify" case: a nil multiClassifyResult falls
+// through with no verdict saved), so the ordinary dedup check in
+// ScanAccount (skip messages with an existing verdict) does not shield a
+// failing message from repeated evaluation -- only the cached error does.
+// Scans twice against a server that always answers 500 and asserts exactly
+// one call reached it.
+func TestMultiClassifyCachesErrorForBackoff(t *testing.T) {
+	database := openTestDB(t)
+
+	var llmCalls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&llmCalls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "ollama",
+		Ollama:   config.OllamaConfig{Endpoint: ts.URL, Model: "test-model"},
+	}
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotion",
+		Name:       "Promotion",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-promo",
+		Name:              "Promotions",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "llm-classify", Category: "promotion"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<promo-outage@test>",
+		Subject:   "Big sale",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-2 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	client := &mockMailClient{messages: []imappkg.FetchedMessage{msg}}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("first ScanAccount: %v", err)
+	}
+	if got := atomic.LoadInt32(&llmCalls); got != 1 {
+		t.Fatalf("LLM server called %d times after first scan, want 1", got)
+	}
+
+	// No verdict was saved (the LLM failed, so evaluateMessage returned nil)
+	// so this second scan re-evaluates the same message from scratch --
+	// the cached error, not the dedup check, is what must stop a second call.
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("second ScanAccount: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&llmCalls); got != 1 {
+		t.Errorf("LLM server called %d times across two scans, want 1 -- the cached error should have backed off the second call", got)
+	}
+}

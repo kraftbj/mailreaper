@@ -653,6 +653,14 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 		return nil, fmt.Errorf("get cached verdict: %w", err)
 	}
 	if cached != nil {
+		if cached.Error != "" {
+			/* Surface the cached failure rather than silently reconstructing
+			an empty response: within the 10-minute error TTL a network call
+			is skipped, but the outage must stay visible in the logs the way
+			a fresh failure would be (see evaluateMessage's "llm-classify"
+			case, which logs whatever error comes back). */
+			return nil, fmt.Errorf("cached llm error: %s", cached.Error)
+		}
 		return &llm.LLMResponse{
 			Category:   cached.Category,
 			ExpiresAt:  cached.ExpiresAt,
@@ -759,6 +767,14 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 
 	var result *llm.LLMResponse
 	if cached != nil {
+		if cached.Error != "" {
+			/* Surface the cached failure rather than silently reconstructing
+			an empty response: within the 10-minute error TTL a network call
+			is skipped, but the outage must stay visible in the logs the way
+			a fresh failure would be (see evaluateMessage's "llm" case, which
+			logs whatever error comes back). */
+			return nil, fmt.Errorf("cached llm error: %s", cached.Error)
+		}
 		result = &llm.LLMResponse{
 			ExpiresAt:  cached.ExpiresAt,
 			Reason:     cached.Reason,
