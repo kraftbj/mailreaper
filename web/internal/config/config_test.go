@@ -193,6 +193,35 @@ func TestExplicitBindAddrIsPreserved(t *testing.T) {
 	}
 }
 
+func TestResolveTimezone(t *testing.T) {
+	tests := []struct {
+		in      string
+		wantErr bool
+		want    string
+	}{
+		{"", false, "Local"},
+		{"Local", false, "Local"},
+		{"America/Chicago", false, "America/Chicago"},
+		{"UTC", false, "UTC"},
+		{"Not/AZone", true, ""},
+	}
+	for _, tt := range tests {
+		loc, err := ResolveTimezone(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("ResolveTimezone(%q): expected error", tt.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("ResolveTimezone(%q): %v", tt.in, err)
+		}
+		if loc.String() != tt.want {
+			t.Errorf("ResolveTimezone(%q) = %q, want %q", tt.in, loc, tt.want)
+		}
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
 	if err == nil {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -63,6 +65,25 @@ type Config struct {
 	LLM      LLMConfig    `yaml:"llm"`
 	Scan     ScanConfig   `yaml:"scan"`
 	Server   ServerConfig `yaml:"server"`
+
+	// Timezone names the IANA zone used to interpret LLM-extracted deadlines
+	// that carry no UTC offset (the model does not reliably emit one). Empty
+	// or "Local" uses the host zone, which is wrong inside a container: the
+	// shipped image has no TZ set and would otherwise read every zoneless
+	// deadline as UTC, expiring mail early for users behind UTC.
+	Timezone string `yaml:"timezone"`
+}
+
+// ResolveTimezone turns a configured zone name into a *time.Location.
+func ResolveTimezone(name string) (*time.Location, error) {
+	if name == "" || strings.EqualFold(name, "local") {
+		return time.Local, nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("config: unknown timezone %q: %w", name, err)
+	}
+	return loc, nil
 }
 
 var envVarRe = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -114,5 +135,10 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyDefaults(&cfg)
+
+	if _, err := ResolveTimezone(cfg.Timezone); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
 }

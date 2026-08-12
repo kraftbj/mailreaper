@@ -51,3 +51,7 @@ server:
   # authentication and can move mail. Only change this behind a reverse
   # proxy that adds auth.
   bind_addr: 127.0.0.1
+
+# IANA timezone used to interpret LLM-extracted deadlines that carry no UTC
+# offset. Defaults to the host zone, which is UTC inside the container.
+timezone: America/Chicago

@@ -34,7 +34,7 @@ func TestExtractValidExpiresAt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, gotPast, gotValid := extractValidExpiresAt(tt.expiresAt, tt.confidence)
+			_, gotPast, gotValid := extractValidExpiresAt(tt.expiresAt, tt.confidence, time.Local)
 			if gotValid != tt.wantValid {
 				t.Errorf("valid: got %v, want %v", gotValid, tt.wantValid)
 			}
@@ -95,7 +95,7 @@ func TestParseExpiresAtLayouts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := parseExpiresAt(tt.in)
+			got, _ := parseExpiresAt(tt.in, time.Local)
 			if got == nil {
 				t.Fatalf("parseExpiresAt(%q) = nil, want %s", tt.in, tt.want)
 			}
@@ -106,12 +106,30 @@ func TestParseExpiresAtLayouts(t *testing.T) {
 	}
 }
 
+// TestParseExpiresAtHonorsConfiguredZone verifies that a zoneless timestamp
+// is read in the caller-supplied location rather than always time.Local —
+// the fix for the container-TZ early-expiry bug (a containerized deploy runs
+// in UTC unless the configured zone is threaded through explicitly).
+func TestParseExpiresAtHonorsConfiguredZone(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	got, _ := parseExpiresAt("2026-06-26T09:00:00", chicago)
+	if got == nil {
+		t.Fatal("expected a time")
+	}
+	want := time.Date(2026, 6, 26, 9, 0, 0, 0, chicago)
+	if !got.Equal(want) {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
 // TestEndOfDayAcrossDST pins the day-advance arithmetic parseExpiresAt uses
-// for date-only deadlines against real DST transitions. parseExpiresAt
-// itself always reads time.Local, so the process zone can't be forced
-// deterministically from within the test; instead this calls the endOfDay
+// for date-only deadlines against real DST transitions. It calls the endOfDay
 // helper directly against explicitly-constructed America/Chicago times,
-// which is deterministic regardless of the machine running the suite.
+// which is deterministic regardless of the machine (and its default zone)
+// running the suite.
 //
 // A fixed Add(24*time.Hour - time.Second) is wrong here: on the 25-hour
 // fall-back day it lands an hour before 23:59:59 (expiring a date-only
@@ -157,7 +175,7 @@ func TestEndOfDayAcrossDST(t *testing.T) {
 // that day is still in progress.
 func TestParseExpiresAtDateOnlyTodayIsNotPast(t *testing.T) {
 	today := time.Now().Format("2006-01-02")
-	_, isPast := parseExpiresAt(today)
+	_, isPast := parseExpiresAt(today, time.Local)
 	if isPast {
 		t.Errorf("date-only deadline of today (%s) reported as already past", today)
 	}
@@ -175,7 +193,7 @@ func TestParseExpiresAtRejects(t *testing.T) {
 		"06/26/2026",
 	} {
 		t.Run(in, func(t *testing.T) {
-			if got, _ := parseExpiresAt(in); got != nil {
+			if got, _ := parseExpiresAt(in, time.Local); got != nil {
 				t.Errorf("parseExpiresAt(%q) = %s, want nil", in, got)
 			}
 		})
@@ -188,10 +206,10 @@ func TestParseExpiresAtPastFlag(t *testing.T) {
 	past := time.Now().Add(-48 * time.Hour).Format("2006-01-02T15:04:05")
 	future := time.Now().Add(48 * time.Hour).Format("2006-01-02T15:04:05")
 
-	if _, isPast := parseExpiresAt(past); !isPast {
+	if _, isPast := parseExpiresAt(past, time.Local); !isPast {
 		t.Errorf("zoneless past timestamp %q: got past=false, want true", past)
 	}
-	if _, isPast := parseExpiresAt(future); isPast {
+	if _, isPast := parseExpiresAt(future, time.Local); isPast {
 		t.Errorf("zoneless future timestamp %q: got past=true, want false", future)
 	}
 }
@@ -232,7 +250,7 @@ func TestBuildClassifyVerdict_PastDeadlineRoutesToCanonicalExpired(t *testing.T)
 		Reason:     "sale ended",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, expiredFolder)
+	v := buildClassifyVerdict(result, current, byCategory, expiredFolder, time.Local)
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -258,7 +276,7 @@ func TestBuildClassifyVerdict_NotificationWithNoDeadlineLandsInCategoryFolder(t 
 		Reason:     "USPS daily digest, no deadline",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired")
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -291,7 +309,7 @@ func TestBuildClassifyVerdict_FutureDeadlinePersistsForLaterSweep(t *testing.T) 
 		Reason:     "sale ends 4/28",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired")
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -326,7 +344,7 @@ func TestBuildClassifyVerdict_LowConfidenceExpiresAtRejected(t *testing.T) {
 		Reason:     "low confidence",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired")
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
 	if v == nil {
 		t.Fatal("expected classification verdict, got nil")
 	}
@@ -354,7 +372,7 @@ func TestBuildClassifyVerdict_NoCategoryMatchReturnsNil(t *testing.T) {
 				ExpiresAt:  "",
 				Confidence: 0.9,
 			}
-			v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired")
+			v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
 			if v != nil {
 				t.Errorf("expected nil verdict for category=%q, got %+v", cat, v)
 			}
@@ -376,7 +394,7 @@ func TestBuildClassifyVerdict_PastDeadlineFallsBackWhenNoExpiredFolder(t *testin
 		Confidence: 0.9,
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "") // no canonical folder
+	v := buildClassifyVerdict(result, current, byCategory, "", time.Local) // no canonical folder
 	if v == nil {
 		t.Fatal("expected verdict")
 	}

@@ -30,12 +30,18 @@ type MailClient interface {
 type Scanner struct {
 	db           *db.DB
 	cfg          *config.Config
+	loc          *time.Location
 	LookbackDays int // 0 = scan all messages
 }
 
 // New creates a new Scanner.
 func New(database *db.DB, cfg *config.Config) *Scanner {
-	return &Scanner{db: database, cfg: cfg, LookbackDays: 7}
+	loc, err := config.ResolveTimezone(cfg.Timezone)
+	if err != nil {
+		log.Printf("scanner: %v; falling back to host local time", err)
+		loc = time.Local
+	}
+	return &Scanner{db: database, cfg: cfg, loc: loc, LookbackDays: 7}
 }
 
 // ScanAccount scans the given folders for an account, evaluating each message
@@ -341,7 +347,7 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 				continue
 			}
 
-			v := buildClassifyVerdict(multiClassifyResult, rule, classifyRulesByCategory, expiredFolder)
+			v := buildClassifyVerdict(multiClassifyResult, rule, classifyRulesByCategory, expiredFolder, s.loc)
 			if v != nil {
 				return v, nil
 			}
@@ -388,14 +394,14 @@ func endOfDay(t time.Time) time.Time {
 // parseExpiresAt parses an expiry date string and returns the time and whether
 // it's already in the past. Returns nil if the string is empty or unparseable.
 //
-// Zoneless input is interpreted in the server's local zone rather than UTC.
-// For a personal mail server that is the user's own zone, and so the closest
-// reading of the wall-clock time the sender wrote. Reading it as UTC instead
-// would place the deadline earlier than intended for anyone behind UTC, and
-// expiring a message early is the failure mode this codebase is built to
-// avoid. Date-only values are handled separately below and advanced to the
-// end of the local day; see dateOnlyExpiryLayout.
-func parseExpiresAt(s string) (*time.Time, bool) {
+// Zoneless input is interpreted in loc rather than UTC. loc is the configured
+// timezone (config.Config.Timezone, resolved once at Scanner construction),
+// which defaults to the host's local zone. Reading zoneless input as UTC
+// instead would place the deadline earlier than intended for anyone behind
+// UTC, and expiring a message early is the failure mode this codebase is
+// built to avoid. Date-only values are handled separately below and advanced
+// to the end of the day in loc; see dateOnlyExpiryLayout.
+func parseExpiresAt(s string, loc *time.Location) (*time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, false
@@ -408,12 +414,12 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 	}
 
 	for _, layout := range zonelessExpiryLayouts {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
 			return &t, time.Now().After(t)
 		}
 	}
 
-	if t, err := time.ParseInLocation(dateOnlyExpiryLayout, s, time.Local); err == nil {
+	if t, err := time.ParseInLocation(dateOnlyExpiryLayout, s, loc); err == nil {
 		t = endOfDay(t)
 		return &t, time.Now().After(t)
 	}
@@ -426,7 +432,7 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 // likely hallucinated). Returns the parsed time, whether it is in the past,
 // and a "valid" flag that is false when the input was empty, unparseable,
 // or rejected by the confidence threshold.
-func extractValidExpiresAt(expiresAt string, confidence float64) (parsed *time.Time, past bool, valid bool) {
+func extractValidExpiresAt(expiresAt string, confidence float64, loc *time.Location) (parsed *time.Time, past bool, valid bool) {
 	if expiresAt == "" {
 		return nil, false, false
 	}
@@ -435,7 +441,7 @@ func extractValidExpiresAt(expiresAt string, confidence float64) (parsed *time.T
 			expiresAt, confidence, minExpiryConfidence)
 		return nil, false, false
 	}
-	t, isPast := parseExpiresAt(expiresAt)
+	t, isPast := parseExpiresAt(expiresAt, loc)
 	if t == nil {
 		return nil, false, false
 	}
@@ -455,8 +461,11 @@ func extractValidExpiresAt(expiresAt string, confidence float64) (parsed *time.T
 //
 // The currentRule is used only for logging/reason context; routing always
 // uses either the matched category's rule or the canonical Expired folder.
-func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCategory map[string]db.Rule, expiredFolder string) *rules.RuleVerdict {
-	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence)
+//
+// loc is the configured timezone used to interpret a zoneless ExpiresAt
+// (see parseExpiresAt).
+func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCategory map[string]db.Rule, expiredFolder string, loc *time.Location) *rules.RuleVerdict {
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, loc)
 
 	if hasDeadline && past {
 		expiredRule := currentRule
@@ -633,7 +642,7 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 		}
 	}
 
-	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence)
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, s.loc)
 	if !hasDeadline || !past {
 		return nil, nil
 	}
