@@ -50,7 +50,7 @@ function renderTriageGrid(categories) {
 
   el.innerHTML = categories.map((cat) => `
     <div class="triage-card">
-      <div class="icon">${cat.icon || "📁"}</div>
+      <div class="icon">${esc(cat.icon) || "📁"}</div>
       <div class="name">${esc(cat.name)}</div>
       <div class="count">${esc(cat.folderName || "")}</div>
     </div>
@@ -85,6 +85,16 @@ function renderReviewQueue(verdicts) {
   const badge = document.getElementById("review-count");
   if (!el) return;
 
+  if (!el.dataset.listenerBound) {
+    el.dataset.listenerBound = "1";
+    el.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const status = btn.dataset.action === "approve" ? "approved" : "rejected";
+      updateVerdict(btn.dataset.id, status);
+    });
+  }
+
   if (badge) badge.textContent = verdicts.length || "";
 
   if (!verdicts || verdicts.length === 0) {
@@ -103,8 +113,8 @@ function renderReviewQueue(verdicts) {
           <span class="verdict-confidence">${fmtConfidence(v.confidence)}</span>
         </div>
         <div class="verdict-actions">
-          <button class="btn btn-sm btn-success" onclick="approveVerdict(${JSON.stringify(v.messageIdHeader)})">Approve</button>
-          <button class="btn btn-sm btn-danger"  onclick="rejectVerdict(${JSON.stringify(v.messageIdHeader)})">Reject</button>
+          <button class="btn btn-sm btn-success" data-action="approve" data-id="${esc(v.messageIdHeader)}">Approve</button>
+          <button class="btn btn-sm btn-danger"  data-action="reject"  data-id="${esc(v.messageIdHeader)}">Reject</button>
         </div>
       </li>
     `).join("") +
@@ -126,14 +136,6 @@ window.scanNow = async function() {
     console.error("Scan failed:", err);
     if (btn) { btn.disabled = false; btn.textContent = "Scan Now"; }
   }
-};
-
-window.approveVerdict = async function(msgId) {
-  await updateVerdict(msgId, "approved");
-};
-
-window.rejectVerdict = async function(msgId) {
-  await updateVerdict(msgId, "rejected");
 };
 
 async function updateVerdict(msgId, status) {
