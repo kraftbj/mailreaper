@@ -253,6 +253,19 @@ func (d *DB) applyOneShotMigrations() error {
 		// repopulates it under the new schema. See design doc:
 		// ~/.gstack/projects/kraftbj-mailreaper/kraft-web-rewrite-design-20260429-081906.md
 		{key: "v2_expiry_redesign_cache_flush", stmt: `DELETE FROM llm_cache`},
+
+		/* 2026-08-12: canonicalExpiredFolder() (scanner.go) resolves the
+		"Expired" destination by looking for a category whose id is
+		literally "expired". Nothing ever created one, so past-deadline
+		mail fell back to whichever triage folder the matching classify
+		rule owned, and SweepDeferredExpiries returned early on every
+		run. Seed it; ON CONFLICT DO NOTHING preserves a user's own
+		"expired" category if they already created one. */
+		{key: "v3_seed_expired_category", stmt: `
+			INSERT INTO categories (id, name, folder_name, icon, color, created_at)
+			VALUES ('expired', 'Expired', 'Expired', '⏰', '#888888', datetime('now'))
+			ON CONFLICT(id) DO NOTHING
+		`},
 	}
 
 	for _, m := range migrations {

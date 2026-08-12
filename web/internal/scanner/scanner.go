@@ -136,7 +136,11 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				// Auto-execute: move the message.
 				dest := verdict.Rule.DestinationFolder
 				if dest == "" {
+					dest = expiredFolder
+				}
+				if dest == "" {
 					dest = "Expired"
+					log.Printf("scanner: no \"expired\" category configured; falling back to literal %q", dest)
 				}
 
 				if err := client.EnsureFolder(dest); err != nil {

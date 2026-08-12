@@ -240,11 +240,21 @@ func TestGetCategories(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&cats); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(cats) != 1 {
-		t.Fatalf("expected 1 category, got %d", len(cats))
+	/* The database also carries the seeded "expired" category (see the
+	v3_seed_expired_category one-shot migration), so look up the category
+	under test by ID instead of assuming it's the only one. */
+	var found *db.Category
+	for i := range cats {
+		if cats[i].ID == "cat-1" {
+			found = &cats[i]
+			break
+		}
 	}
-	if cats[0].Name != "Paper-Trail" {
-		t.Errorf("expected name %q, got %q", "Paper-Trail", cats[0].Name)
+	if found == nil {
+		t.Fatalf("expected category %q in response, got %d categories", "cat-1", len(cats))
+	}
+	if found.Name != "Paper-Trail" {
+		t.Errorf("expected name %q, got %q", "Paper-Trail", found.Name)
 	}
 }
 
