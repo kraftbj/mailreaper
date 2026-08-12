@@ -102,10 +102,14 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			log.Printf("backfill: [%d/%d] %q from %s",
 				i+1, len(msgs), msg.Subject, msg.Sender)
 
-			// Force re-evaluation: drop any prior verdict so the dedup at
-			// scanner.evaluateMessage doesn't short-circuit the re-pass.
-			if _, err := s.db.ClearVerdictByMessageID(msg.MessageID); err != nil {
-				log.Printf("backfill: clear verdict for %q: %v", msg.MessageID, err)
+			// Backfill re-asks the LLM rather than trusting a prior answer,
+			// so the cached verdict must go. The verdict row itself is left
+			// alone: the dedup check lives in ScanAccount, not
+			// evaluateMessage, so deleting it here bought nothing and left a
+			// hole that DetectFeedback misread as a user filing whenever the
+			// evaluation below failed.
+			if err := s.db.RemoveCachedVerdict(msg.MessageID); err != nil {
+				log.Printf("backfill: remove cached verdict for %q: %v", msg.MessageID, err)
 			}
 
 			verdict, err := s.evaluateMessage(ctx, client, &msg, enabledRules, expiredFolder)
