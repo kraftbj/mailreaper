@@ -2,8 +2,9 @@ package server
 
 import (
 	"context"
-	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/kraftbj/mailreaper/internal/db"
 )
@@ -13,17 +14,19 @@ type Server struct {
 	db                *db.DB
 	mux               *http.ServeMux
 	handler           http.Handler // mux wrapped with withSameOrigin; always serve this, never mux directly
+	bindAddr          string
 	port              int
 	OnScanRequested   func()     // called when user clicks "Scan Now"
 	OnRescanRequested func() // full rescan: no lookback limit, no message cap
 }
 
 // NewServer creates a Server and registers all routes on the mux.
-func NewServer(database *db.DB, port int) *Server {
+func NewServer(database *db.DB, bindAddr string, port int) *Server {
 	s := &Server{
-		db:   database,
-		mux:  http.NewServeMux(),
-		port: port,
+		db:       database,
+		mux:      http.NewServeMux(),
+		bindAddr: bindAddr,
+		port:     port,
 	}
 	s.registerRoutes()
 	s.handler = withSameOrigin(s.mux)
@@ -38,7 +41,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Start begins listening on the configured port. It blocks until the context
 // is cancelled, then gracefully shuts down the server.
 func (s *Server) Start(ctx context.Context) error {
-	addr := fmt.Sprintf(":%d", s.port)
+	addr := net.JoinHostPort(s.bindAddr, strconv.Itoa(s.port))
 	httpSrv := &http.Server{Addr: addr, Handler: s.handler}
 
 	go func() {

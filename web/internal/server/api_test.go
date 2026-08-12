@@ -29,7 +29,7 @@ func openTestDB(t *testing.T) *db.DB {
 func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 	t.Helper()
 	d := openTestDB(t)
-	s := server.NewServer(d, 0)
+	s := server.NewServer(d, "127.0.0.1", 0)
 	return s, d
 }
 

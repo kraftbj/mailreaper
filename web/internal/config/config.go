@@ -53,7 +53,8 @@ type ScanConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port int `yaml:"port"`
+	Port     int    `yaml:"port"`
+	BindAddr string `yaml:"bind_addr"`
 }
 
 // Config is the top-level configuration structure.
@@ -91,6 +92,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8025
+	}
+	if cfg.Server.BindAddr == "" {
+		cfg.Server.BindAddr = "127.0.0.1"
 	}
 }
 

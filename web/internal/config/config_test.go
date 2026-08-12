@@ -177,6 +177,22 @@ accounts:
 	}
 }
 
+func TestDefaultBindAddrIsLoopback(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Server.BindAddr != "127.0.0.1" {
+		t.Errorf("BindAddr = %q, want 127.0.0.1", cfg.Server.BindAddr)
+	}
+}
+
+func TestExplicitBindAddrIsPreserved(t *testing.T) {
+	cfg := &Config{Server: ServerConfig{BindAddr: "0.0.0.0"}}
+	applyDefaults(cfg)
+	if cfg.Server.BindAddr != "0.0.0.0" {
+		t.Errorf("BindAddr = %q, want 0.0.0.0", cfg.Server.BindAddr)
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
 	if err == nil {

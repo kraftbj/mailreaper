@@ -108,7 +108,7 @@ func main() {
 	}()
 
 	// Start web server (blocks until context cancelled).
-	srv := server.NewServer(database, cfg.Server.Port)
+	srv := server.NewServer(database, cfg.Server.BindAddr, cfg.Server.Port)
 	srv.OnScanRequested = func() {
 		runFullScan(ctx, scan, cfg)
 	}
@@ -118,7 +118,7 @@ func main() {
 		runFullScan(ctx, scan, cfg)
 		scan.LookbackDays = prev
 	}
-	log.Printf("starting web server on :%d", cfg.Server.Port)
+	log.Printf("starting web server on %s:%d", cfg.Server.BindAddr, cfg.Server.Port)
 	if err := srv.Start(ctx); err != nil {
 		log.Printf("web server error: %v", err)
 		os.Exit(1)

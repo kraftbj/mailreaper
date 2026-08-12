@@ -47,3 +47,7 @@ scan:
 server:
   # Port for the web UI and API (default: 8025)
   port: 8025
+  # Interface to bind. Defaults to loopback because the dashboard has no
+  # authentication and can move mail. Only change this behind a reverse
+  # proxy that adds auth.
+  bind_addr: 127.0.0.1
