@@ -120,7 +120,11 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			}
 
 			dest := backfillDestination(verdict, expiredFolder, rescueFolder)
-			confidence := 1.0
+			// A nil verdict means "no rule matched or the LLM call failed" --
+			// that is an absence of information, not confidence that the
+			// message belongs in the rescue folder. Scoring it 0 lets the
+			// existing <0.7 gate below leave the message where it is.
+			confidence := 0.0
 			if verdict != nil {
 				confidence = verdict.Confidence
 			}

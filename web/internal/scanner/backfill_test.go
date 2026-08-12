@@ -213,3 +213,87 @@ func TestBackfillClearsCachedVerdict(t *testing.T) {
 		t.Errorf("cached Reason = %q, want %q", cached.Reason, freshReason)
 	}
 }
+
+// TestBackfillNilVerdictFromLLMFailureDoesNotRescue proves that a real LLM
+// outage during --backfill does not empty a triage folder into the rescue
+// folder (typically INBOX). This reproduces the actual regression rather
+// than constructing a nil *rules.RuleVerdict by hand: it seeds a real
+// enabled "llm" rule and points the "ollama" provider at a local
+// httptest.Server that answers every request with HTTP 500, so
+// evaluateLLM's error path fires for real, evaluateMessage's "llm" case
+// logs the error and falls through, and evaluateMessage returns a genuine
+// nil verdict -- exactly what a Gemini/Ollama outage produces in
+// production.
+//
+// "we learned nothing" must not be scored as "confidently belongs in the
+// rescue folder": backfill previously assigned confidence 1.0 to a nil
+// verdict, which cleared the < 0.7 gate and moved the message. The message
+// must stay in its triage folder instead.
+func TestBackfillNilVerdictFromLLMFailureDoesNotRescue(t *testing.T) {
+	database := openTestDB(t)
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotions",
+		Name:       "Promotions",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:               "rule-llm-test",
+		Name:             "LLM deadline rule",
+		Enabled:          true,
+		Priority:         10,
+		ExpirationConfig: db.ExpirationConfig{Type: "llm"},
+		Action:           "move",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	var llmCalls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&llmCalls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "ollama",
+		Ollama:   config.OllamaConfig{Endpoint: ts.URL, Model: "test-model"},
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<msg-outage@test>",
+		Subject:   "unclassifiable during outage",
+		Sender:    "someone@example.test",
+		Date:      time.Now().Add(-72 * time.Hour),
+		Folder:    "Folders/AI-Triage/Promotions",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Promotions": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	stats, err := s.BackfillFolders(context.Background(), client, "acct1", "INBOX")
+	if err != nil {
+		t.Fatalf("BackfillFolders: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&llmCalls); got != 1 {
+		t.Fatalf("LLM server called %d times, want 1 -- test did not actually exercise the outage path", got)
+	}
+	if stats.Moved != 0 {
+		t.Errorf("Moved = %d, want 0: a nil verdict from an LLM outage must not move mail", stats.Moved)
+	}
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("moved %d message(s) on a nil verdict from an LLM outage", len(client.movedMsgs))
+	}
+}
