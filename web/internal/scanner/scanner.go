@@ -347,7 +347,7 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 				continue
 			}
 
-			v := buildClassifyVerdict(multiClassifyResult, rule, classifyRulesByCategory, expiredFolder, s.loc)
+			v := buildClassifyVerdict(multiClassifyResult, rule, classifyRulesByCategory, expiredFolder, s.loc, msg.Date)
 			if v != nil {
 				return v, nil
 			}
@@ -427,12 +427,26 @@ func parseExpiresAt(s string, loc *time.Location) (*time.Time, bool) {
 	return nil, false
 }
 
+// maxExpiryHorizon bounds how far past the send date an extracted deadline
+// may sit. Beyond this the model is describing something other than a
+// deadline on this message.
+const maxExpiryHorizon = 2 * 365 * 24 * time.Hour
+
 // extractValidExpiresAt parses the LLM-returned ExpiresAt and applies the
 // confidence guard (decision 3A — reject low-confidence extractions as
-// likely hallucinated). Returns the parsed time, whether it is in the past,
-// and a "valid" flag that is false when the input was empty, unparseable,
-// or rejected by the confidence threshold.
-func extractValidExpiresAt(expiresAt string, confidence float64, loc *time.Location) (parsed *time.Time, past bool, valid bool) {
+// likely hallucinated) plus a plausibility floor: a deadline at or before
+// sentAt is impossible by construction, and one more than maxExpiryHorizon
+// past sentAt is describing something other than a deadline on this message.
+// Returns the parsed time, whether it is in the past, and a "valid" flag
+// that is false when the input was empty, unparseable, rejected by the
+// confidence threshold, or implausible relative to sentAt.
+//
+// sentAt is an instant comparison, not a calendar-date comparison — a
+// date-only deadline is resolved to 23:59:59 of that day (see endOfDay), so
+// a message sent at 6pm saying "offer ends today" still passes. Passing the
+// zero time.Time{} disables the plausibility window entirely; this is the
+// documented behavior for callers without a reliable send date.
+func extractValidExpiresAt(expiresAt string, confidence float64, loc *time.Location, sentAt time.Time) (parsed *time.Time, past bool, valid bool) {
 	if expiresAt == "" {
 		return nil, false, false
 	}
@@ -443,7 +457,20 @@ func extractValidExpiresAt(expiresAt string, confidence float64, loc *time.Locat
 	}
 	t, isPast := parseExpiresAt(expiresAt, loc)
 	if t == nil {
+		log.Printf("scanner: dropping unparseable LLM expiresAt=%q (no layout matched)", expiresAt)
 		return nil, false, false
+	}
+	if !sentAt.IsZero() {
+		if !t.After(sentAt) {
+			log.Printf("scanner: dropping implausible LLM expiresAt=%q -- at or before send date %s",
+				expiresAt, sentAt.Format(time.RFC3339))
+			return nil, false, false
+		}
+		if t.Sub(sentAt) > maxExpiryHorizon {
+			log.Printf("scanner: dropping implausible LLM expiresAt=%q -- more than %.0f days after send date %s",
+				expiresAt, maxExpiryHorizon.Hours()/24, sentAt.Format(time.RFC3339))
+			return nil, false, false
+		}
 	}
 	return t, isPast, true
 }
@@ -463,9 +490,10 @@ func extractValidExpiresAt(expiresAt string, confidence float64, loc *time.Locat
 // uses either the matched category's rule or the canonical Expired folder.
 //
 // loc is the configured timezone used to interpret a zoneless ExpiresAt
-// (see parseExpiresAt).
-func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCategory map[string]db.Rule, expiredFolder string, loc *time.Location) *rules.RuleVerdict {
-	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, loc)
+// (see parseExpiresAt). sentAt is the message's send date, used as the
+// plausibility floor for the extracted deadline (see extractValidExpiresAt).
+func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCategory map[string]db.Rule, expiredFolder string, loc *time.Location, sentAt time.Time) *rules.RuleVerdict {
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, loc, sentAt)
 
 	if hasDeadline && past {
 		expiredRule := currentRule
@@ -642,7 +670,7 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 		}
 	}
 
-	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, s.loc)
+	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, s.loc, msg.Date)
 	if !hasDeadline || !past {
 		return nil, nil
 	}

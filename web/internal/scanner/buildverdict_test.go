@@ -34,7 +34,7 @@ func TestExtractValidExpiresAt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, gotPast, gotValid := extractValidExpiresAt(tt.expiresAt, tt.confidence, time.Local)
+			_, gotPast, gotValid := extractValidExpiresAt(tt.expiresAt, tt.confidence, time.Local, time.Time{})
 			if gotValid != tt.wantValid {
 				t.Errorf("valid: got %v, want %v", gotValid, tt.wantValid)
 			}
@@ -43,6 +43,47 @@ func TestExtractValidExpiresAt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExtractValidExpiresAtPlausibility rejects deadlines that cannot be
+// real regardless of how confident the model claims to be. A deadline
+// before the send date is impossible; one many years out is not a
+// deadline. Both shapes appear in production data from the old model.
+func TestExtractValidExpiresAtPlausibility(t *testing.T) {
+	sentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		expiresAt string
+		wantValid bool
+	}{
+		{"a day after send is plausible", "2026-06-02T12:00:00Z", true},
+		{"same instant as send is rejected", "2026-06-01T12:00:00Z", false},
+		{"before send is rejected", "2026-05-01T12:00:00Z", false},
+		{"one year out is plausible", "2027-05-01T12:00:00Z", true},
+		{"ten years out is rejected", "2036-06-01T12:00:00Z", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, valid := extractValidExpiresAt(tt.expiresAt, 1.0, time.UTC, sentAt)
+			if valid != tt.wantValid {
+				t.Errorf("valid = %v, want %v", valid, tt.wantValid)
+			}
+		})
+	}
+}
+
+// TestSameDayDeadlineSurvivesPlausibilityFloor guards the interaction
+// between the end-of-day date parsing and the plausibility floor. A 6pm
+// "offer ends today" is a real deadline, not an implausible one.
+func TestSameDayDeadlineSurvivesPlausibilityFloor(t *testing.T) {
+	sentAt := time.Date(2026, 6, 1, 18, 0, 0, 0, time.Local)
+	_, past, valid := extractValidExpiresAt("2026-06-01", 1.0, time.Local, sentAt)
+	if !valid {
+		t.Fatal("same-day date-only deadline rejected; a 6pm \"ends today\" offer is real")
+	}
+	_ = past
 }
 
 // TestParseExpiresAtLayouts covers the timestamp shapes the LLM actually
@@ -250,7 +291,7 @@ func TestBuildClassifyVerdict_PastDeadlineRoutesToCanonicalExpired(t *testing.T)
 		Reason:     "sale ended",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, expiredFolder, time.Local)
+	v := buildClassifyVerdict(result, current, byCategory, expiredFolder, time.Local, time.Time{})
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -276,7 +317,7 @@ func TestBuildClassifyVerdict_NotificationWithNoDeadlineLandsInCategoryFolder(t 
 		Reason:     "USPS daily digest, no deadline",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local, time.Time{})
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -309,7 +350,7 @@ func TestBuildClassifyVerdict_FutureDeadlinePersistsForLaterSweep(t *testing.T) 
 		Reason:     "sale ends 4/28",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local, time.Time{})
 	if v == nil {
 		t.Fatal("expected verdict, got nil")
 	}
@@ -344,7 +385,7 @@ func TestBuildClassifyVerdict_LowConfidenceExpiresAtRejected(t *testing.T) {
 		Reason:     "low confidence",
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
+	v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local, time.Time{})
 	if v == nil {
 		t.Fatal("expected classification verdict, got nil")
 	}
@@ -372,7 +413,7 @@ func TestBuildClassifyVerdict_NoCategoryMatchReturnsNil(t *testing.T) {
 				ExpiresAt:  "",
 				Confidence: 0.9,
 			}
-			v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local)
+			v := buildClassifyVerdict(result, current, byCategory, "Folders/AI-Triage/Expired", time.Local, time.Time{})
 			if v != nil {
 				t.Errorf("expected nil verdict for category=%q, got %+v", cat, v)
 			}
@@ -394,7 +435,7 @@ func TestBuildClassifyVerdict_PastDeadlineFallsBackWhenNoExpiredFolder(t *testin
 		Confidence: 0.9,
 	}
 
-	v := buildClassifyVerdict(result, current, byCategory, "", time.Local) // no canonical folder
+	v := buildClassifyVerdict(result, current, byCategory, "", time.Local, time.Time{}) // no canonical folder
 	if v == nil {
 		t.Fatal("expected verdict")
 	}
