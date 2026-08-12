@@ -106,8 +106,8 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			// so the cached verdict must go. The verdict row itself is left
 			// alone: the dedup check lives in ScanAccount, not
 			// evaluateMessage, so deleting it here bought nothing and left a
-			// hole that DetectFeedback misread as a user filing whenever the
-			// evaluation below failed.
+			// hole that DetectManualClassifications misread as a user filing
+			// whenever the evaluation below failed.
 			if err := s.db.RemoveCachedVerdict(msg.MessageID); err != nil {
 				log.Printf("backfill: remove cached verdict for %q: %v", msg.MessageID, err)
 			}
