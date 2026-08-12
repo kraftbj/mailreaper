@@ -147,17 +147,11 @@ func buildAutoRule(email string) (ruleID, senderPattern, name string) {
 		return
 	}
 
-	// Regular email: match by domain.
-	parts := strings.SplitN(email, "@", 2)
-	if len(parts) == 2 {
-		domain := parts[1]
-		name = domain
-		senderPattern = fmt.Sprintf("*@%s", domain)
-		ruleID = fmt.Sprintf("auto-%s", sanitizeID(domain))
-		return
-	}
-
-	// Fallback: exact match.
+	// Match the exact address. Three messages from one person is evidence
+	// about that person, not about everyone who uses their mail provider --
+	// a *@gmail.com rule silently files all personal mail out of the inbox.
+	// The SimpleLogin branch above is different: those aliases are
+	// per-sender by construction, so the pattern there is already specific.
 	name = email
 	senderPattern = email
 	ruleID = fmt.Sprintf("auto-%s", sanitizeID(email))
