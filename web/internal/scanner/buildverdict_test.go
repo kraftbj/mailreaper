@@ -82,9 +82,9 @@ func TestParseExpiresAtLayouts(t *testing.T) {
 			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.Local),
 		},
 		{
-			name: "date only is local midnight",
+			name: "date only is end of local day",
 			in:   "2026-06-26",
-			want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.Local),
+			want: time.Date(2026, 6, 26, 23, 59, 59, 0, time.Local),
 		},
 		{
 			name: "surrounding whitespace is tolerated",
@@ -103,6 +103,30 @@ func TestParseExpiresAtLayouts(t *testing.T) {
 				t.Errorf("parseExpiresAt(%q) = %s, want %s", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseExpiresAtDateOnlyIsEndOfDay pins the semantics prompts.go asks
+// the model for: a bare date means the deadline lapses at the end of that
+// day, not at midnight when it begins.
+func TestParseExpiresAtDateOnlyIsEndOfDay(t *testing.T) {
+	got, _ := parseExpiresAt("2026-06-26")
+	if got == nil {
+		t.Fatal("parseExpiresAt(\"2026-06-26\") = nil, want a time")
+	}
+	want := time.Date(2026, 6, 26, 23, 59, 59, 0, time.Local)
+	if !got.Equal(want) {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+// A date-only deadline for today must not read as already expired while
+// that day is still in progress.
+func TestParseExpiresAtDateOnlyTodayIsNotPast(t *testing.T) {
+	today := time.Now().Format("2006-01-02")
+	_, isPast := parseExpiresAt(today)
+	if isPast {
+		t.Errorf("date-only deadline of today (%s) reported as already past", today)
 	}
 }
 

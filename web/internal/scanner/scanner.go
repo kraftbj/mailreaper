@@ -364,8 +364,13 @@ var zonelessExpiryLayouts = []string{
 	"2006-01-02T15:04",
 	"2006-01-02 15:04:05",
 	"2006-01-02 15:04",
-	"2006-01-02",
 }
+
+// dateOnlyExpiryLayout is handled separately from the datetime layouts: a
+// bare date means the deadline lapses at the END of that day. prompts.go
+// asks the model for 23:59:59 semantics, and reading a bare date as
+// midnight expires the message a full day early.
+const dateOnlyExpiryLayout = "2006-01-02"
 
 // parseExpiresAt parses an expiry date string and returns the time and whether
 // it's already in the past. Returns nil if the string is empty or unparseable.
@@ -375,8 +380,8 @@ var zonelessExpiryLayouts = []string{
 // reading of the wall-clock time the sender wrote. Reading it as UTC instead
 // would place the deadline earlier than intended for anyone behind UTC, and
 // expiring a message early is the failure mode this codebase is built to
-// avoid. Note this also shifts date-only values from UTC midnight to local
-// midnight, which moves them later for those same users.
+// avoid. Date-only values are handled separately below and advanced to the
+// end of the local day; see dateOnlyExpiryLayout.
 func parseExpiresAt(s string) (*time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -393,6 +398,11 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			return &t, time.Now().After(t)
 		}
+	}
+
+	if t, err := time.ParseInLocation(dateOnlyExpiryLayout, s, time.Local); err == nil {
+		t = t.Add(24*time.Hour - time.Second)
+		return &t, time.Now().After(t)
 	}
 
 	return nil, false
