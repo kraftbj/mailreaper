@@ -620,7 +620,12 @@ func parseExpiresAt(s string) (*time.Time, bool) {
 	}
 
 	if t, err := time.ParseInLocation(dateOnlyExpiryLayout, s, time.Local); err == nil {
-		t = t.Add(24*time.Hour - time.Second)
+		// AddDate normalizes through the calendar and location. A fixed
+		// 24h duration is WRONG across DST: on a 25-hour fall-back day it
+		// lands at 22:59:59 (an hour early -- the direction that destroys
+		// mail), and on a 23-hour spring-forward day it rolls into the
+		// next calendar day.
+		t = t.AddDate(0, 0, 1).Add(-time.Second)
 		return &t, time.Now().After(t)
 	}
 
