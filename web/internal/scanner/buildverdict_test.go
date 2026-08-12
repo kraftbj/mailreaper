@@ -45,6 +45,100 @@ func TestExtractValidExpiresAt(t *testing.T) {
 	}
 }
 
+// TestParseExpiresAtLayouts covers the timestamp shapes the LLM actually
+// returns. The prompt asks for RFC3339, but both gemini-2.5-flash and
+// gemini-3.5-flash-lite intermittently drop the zone and return a bare
+// wall-clock timestamp; those used to fail every layout and be discarded
+// silently, throwing away a correctly-extracted deadline.
+func TestParseExpiresAtLayouts(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want time.Time
+	}{
+		{
+			name: "RFC3339 with offset",
+			in:   "2026-06-26T09:00:00-06:00",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.FixedZone("", -6*60*60)),
+		},
+		{
+			name: "RFC3339 UTC",
+			in:   "2026-06-26T09:00:00Z",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "zoneless wall clock is read as local",
+			in:   "2026-06-26T09:00:00",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.Local),
+		},
+		{
+			name: "zoneless without seconds",
+			in:   "2026-06-26T09:00",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.Local),
+		},
+		{
+			name: "zoneless with space separator",
+			in:   "2026-06-26 09:00:00",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.Local),
+		},
+		{
+			name: "date only is local midnight",
+			in:   "2026-06-26",
+			want: time.Date(2026, 6, 26, 0, 0, 0, 0, time.Local),
+		},
+		{
+			name: "surrounding whitespace is tolerated",
+			in:   "  2026-06-26T09:00:00Z  ",
+			want: time.Date(2026, 6, 26, 9, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := parseExpiresAt(tt.in)
+			if got == nil {
+				t.Fatalf("parseExpiresAt(%q) = nil, want %s", tt.in, tt.want)
+			}
+			if !got.Equal(tt.want) {
+				t.Errorf("parseExpiresAt(%q) = %s, want %s", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseExpiresAtRejects covers input that must not yield a deadline.
+// Anything accepted here would expire real mail on a fabricated date.
+func TestParseExpiresAtRejects(t *testing.T) {
+	for _, in := range []string{
+		"",
+		"   ",
+		"next Tuesday",
+		"sale ends Friday",
+		"2026-13-45T99:99:99",
+		"06/26/2026",
+	} {
+		t.Run(in, func(t *testing.T) {
+			if got, _ := parseExpiresAt(in); got != nil {
+				t.Errorf("parseExpiresAt(%q) = %s, want nil", in, got)
+			}
+		})
+	}
+}
+
+// TestParseExpiresAtPastFlag verifies the past/future flag independently of
+// layout, since that flag is what routes a message to Expired.
+func TestParseExpiresAtPastFlag(t *testing.T) {
+	past := time.Now().Add(-48 * time.Hour).Format("2006-01-02T15:04:05")
+	future := time.Now().Add(48 * time.Hour).Format("2006-01-02T15:04:05")
+
+	if _, isPast := parseExpiresAt(past); !isPast {
+		t.Errorf("zoneless past timestamp %q: got past=false, want true", past)
+	}
+	if _, isPast := parseExpiresAt(future); isPast {
+		t.Errorf("zoneless future timestamp %q: got past=true, want false", future)
+	}
+}
+
 // fakeLLMClassifyRules returns a rule set covering two categories with
 // distinct destination folders so we can verify routing.
 func fakeLLMClassifyRules() (currentRule db.Rule, byCategory map[string]db.Rule) {

@@ -352,18 +352,49 @@ func (s *Scanner) evaluateMessage(ctx context.Context, client MailClient, msg *i
 	return nil, nil
 }
 
+// zonedExpiryLayouts carry an explicit UTC offset, so they are parsed as-is.
+var zonedExpiryLayouts = []string{time.RFC3339}
+
+// zonelessExpiryLayouts omit any zone. The prompt asks for RFC3339, but the
+// model does not always comply and intermittently returns a bare wall-clock
+// timestamp such as "2026-06-26T09:00:00". Those previously matched no layout
+// and were discarded silently, throwing away a correctly-extracted deadline.
+var zonelessExpiryLayouts = []string{
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04",
+	"2006-01-02",
+}
+
 // parseExpiresAt parses an expiry date string and returns the time and whether
 // it's already in the past. Returns nil if the string is empty or unparseable.
+//
+// Zoneless input is interpreted in the server's local zone rather than UTC.
+// For a personal mail server that is the user's own zone, and so the closest
+// reading of the wall-clock time the sender wrote. Reading it as UTC instead
+// would place the deadline earlier than intended for anyone behind UTC, and
+// expiring a message early is the failure mode this codebase is built to
+// avoid. Note this also shifts date-only values from UTC midnight to local
+// midnight, which moves them later for those same users.
 func parseExpiresAt(s string) (*time.Time, bool) {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, false
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05Z", "2006-01-02"} {
-		t, err := time.Parse(layout, s)
-		if err == nil {
+
+	for _, layout := range zonedExpiryLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
 			return &t, time.Now().After(t)
 		}
 	}
+
+	for _, layout := range zonelessExpiryLayouts {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return &t, time.Now().After(t)
+		}
+	}
+
 	return nil, false
 }
 
