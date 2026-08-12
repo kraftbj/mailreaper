@@ -126,7 +126,7 @@ var headerDateFormats = []string{
 // EvaluateHeader checks the Expires header in the provided headers map.
 // Returns nil if the header is absent, unparseable, or in the future.
 func EvaluateHeader(headers map[string][]string, rule db.Rule) *RuleVerdict {
-	values, ok := headers["Expires"]
+	values, ok := headerValues(headers, "expires")
 	if !ok || len(values) == 0 || values[0] == "" {
 		return nil
 	}
@@ -155,6 +155,21 @@ func EvaluateHeader(headers map[string][]string, rule db.Rule) *RuleVerdict {
 		}
 	}
 	return nil
+}
+
+// headerValues looks up a header case-insensitively. imap.FetchNewMessages
+// lowercases every key when it builds the map, but callers and tests have
+// historically used canonical MIME casing, so accept both.
+func headerValues(headers map[string][]string, name string) ([]string, bool) {
+	if v, ok := headers[name]; ok {
+		return v, true
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // contentDateFormats lists formats tried when parsing a date captured by the

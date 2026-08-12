@@ -26,7 +26,8 @@ type FetchedMessage struct {
 	Sender    string
 	Date      time.Time
 	Folder    string
-	Headers   map[string][]string // lowercase keys
+	// Headers holds the message headers with all keys lowercased.
+	Headers map[string][]string
 }
 
 // Connect dials the IMAP server and authenticates with the configured

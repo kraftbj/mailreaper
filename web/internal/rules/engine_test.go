@@ -210,6 +210,23 @@ func TestEvaluateHeader_RFC1123Format(t *testing.T) {
 	}
 }
 
+// TestEvaluateHeaderUsesLowercaseKeys builds the headers map the way
+// imap.FetchNewMessages builds it (client.go lowercases every key). The
+// pre-existing tests in this file use a capital "Expires", which is why a
+// rule that could never fire in production passed CI.
+func TestEvaluateHeaderUsesLowercaseKeys(t *testing.T) {
+	past := time.Now().Add(-48 * time.Hour).Format(time.RFC1123Z)
+	headers := map[string][]string{"expires": {past}}
+
+	verdict := EvaluateHeader(headers, db.Rule{ID: "builtin-expires"})
+	if verdict == nil {
+		t.Fatal("expected a verdict for a past Expires header with a lowercase key")
+	}
+	if !verdict.Expired {
+		t.Error("expected Expired = true")
+	}
+}
+
 // ---------- EvaluateContentRegex ----------
 
 func TestEvaluateContentRegex_Match(t *testing.T) {
