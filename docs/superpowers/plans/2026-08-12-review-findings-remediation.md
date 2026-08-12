@@ -1707,9 +1707,15 @@ func TestDistillDoesNotWidenToConsumerDomain(t *testing.T) {
 
 // The SimpleLogin branch is per-sender by construction and must keep working.
 func TestDistillSimpleLoginAliasUnchanged(t *testing.T) {
+	// Assert the alias-scoped SHAPE, not just the suffix: a regression that
+	// turned this branch into "*@simplelogin.co" would be the same
+	// domain-wide bug this task fixes, and a HasSuffix check would pass it.
 	_, senderPattern, _ := buildAutoRule("news_at_example_com_abc123@simplelogin.co")
-	if !strings.HasSuffix(senderPattern, "@simplelogin.co") {
-		t.Errorf("senderPattern = %q, want a simplelogin-scoped pattern", senderPattern)
+	if senderPattern == "*@simplelogin.co" {
+		t.Fatalf("SimpleLogin branch regressed to a provider-wide pattern: %q", senderPattern)
+	}
+	if !strings.Contains(senderPattern, "news") {
+		t.Errorf("senderPattern = %q, want the alias local-part scoped into the pattern", senderPattern)
 	}
 }
 ```
