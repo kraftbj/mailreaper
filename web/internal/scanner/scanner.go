@@ -140,7 +140,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				}
 				if dest == "" {
 					dest = "Expired"
-					log.Printf("scanner: no \"expired\" category configured; falling back to literal %q", dest)
+					log.Printf("scanner: could not resolve an \"expired\" category folder (missing or misconfigured); falling back to literal %q", dest)
 				}
 
 				if err := client.EnsureFolder(dest); err != nil {

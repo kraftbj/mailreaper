@@ -241,8 +241,13 @@ func TestGetCategories(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	/* The database also carries the seeded "expired" category (see the
-	v3_seed_expired_category one-shot migration), so look up the category
-	under test by ID instead of assuming it's the only one. */
+	v3_seed_expired_category one-shot migration), so the saved "cat-1" plus
+	that seed makes exactly 2 rows. Assert the exact count so a duplicate
+	or leaked third category would still fail this test, then look up
+	"cat-1" by ID to check its shape. */
+	if len(cats) != 2 {
+		t.Fatalf("expected 2 categories (cat-1 + seeded expired), got %d", len(cats))
+	}
 	var found *db.Category
 	for i := range cats {
 		if cats[i].ID == "cat-1" {
