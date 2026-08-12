@@ -148,7 +148,7 @@ func callGemini(ctx context.Context, cfg *config.GeminiConfig, systemPrompt, use
 
 	model := cfg.Model
 	if model == "" {
-		model = "gemini-2.0-flash"
+		model = "gemini-3.5-flash-lite"
 	}
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 

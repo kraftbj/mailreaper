@@ -27,7 +27,11 @@ llm:
   provider: gemini
   gemini:
     api_key: ${GEMINI_API_KEY}
-    model: gemini-2.0-flash
+    # Thinking defaults to "minimal" on 3.5-flash-lite, which is what we want:
+    # deadline extraction and classification are lookup tasks, not reasoning
+    # tasks, and thinking tokens bill at the output rate.
+    model: gemini-3.5-flash-lite
+    service_tier: flex  # 50% cost reduction, uses spare capacity
   ollama:
     endpoint: http://localhost:11434
     model: llama3

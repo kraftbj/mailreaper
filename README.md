@@ -56,7 +56,7 @@ llm:
   provider: gemini  # gemini | ollama | none
   gemini:
     api_key: ${GEMINI_API_KEY}
-    model: gemini-2.5-flash
+    model: gemini-3.5-flash-lite
     service_tier: flex  # 50% cost reduction, uses spare capacity
   ollama:
     endpoint: http://localhost:11434
