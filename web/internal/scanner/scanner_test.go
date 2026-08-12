@@ -18,6 +18,7 @@ type mockMailClient struct {
 	inboxMsgIDs    []string
 	folderMessages map[string][]imappkg.FetchedMessage
 	moveErr        error // when set, MoveMessage fails without recording
+	fetchBodyCalls int   // counts FetchBody invocations; a proxy for "was content/LLM evaluation attempted"
 }
 
 func (m *mockMailClient) FetchNewMessages(folder string, since time.Time, maxAge time.Duration, limit int) ([]imappkg.FetchedMessage, error) {
@@ -45,6 +46,7 @@ func (m *mockMailClient) GetMessagesInFolder(folder string) ([]imappkg.FetchedMe
 }
 
 func (m *mockMailClient) FetchBody(folder string, uid uint32) (string, error) {
+	m.fetchBodyCalls++
 	return "", nil
 }
 
@@ -210,6 +212,165 @@ func TestScanCycleFailedMoveRecordsMoveFailed(t *testing.T) {
 	}
 	if v.ActedAt != nil {
 		t.Error("ActedAt set despite the move failing")
+	}
+}
+
+// TestScanCycleRetriesMoveFailedVerdict verifies that a message with a
+// pre-existing move_failed verdict is reclaimed on the next scan: the move
+// is retried using the destination already captured on the row, and on
+// success the verdict flips to executed. Critically, no rule evaluation or
+// LLM call happens on this path -- fetchBodyCalls must stay at zero, since
+// that is the property the whole "bounded" design rests on.
+func TestScanCycleRetriesMoveFailedVerdict(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := database.SaveVerdict(db.Verdict{
+		AccountID:         "acct1",
+		MessageIDHeader:   "<retry-1@test>",
+		Subject:           "Your OTP Code",
+		Sender:            "security@example.com",
+		SentAt:            now.Add(-3 * time.Hour),
+		Status:            "move_failed",
+		DestinationFolder: "Expired",
+		Reason:            "matched ttl rule",
+		Confidence:        1.0,
+		EvaluatedAt:       now,
+	}); err != nil {
+		t.Fatalf("save existing move_failed verdict: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       9,
+		MessageID: "<retry-1@test>",
+		Subject:   "Your OTP Code",
+		Sender:    "security@example.com",
+		Date:      now.Add(-3 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	// No rule is seeded, and no moveErr is set -- the retry succeeds
+	// purely from the destination recorded on the existing verdict.
+	client := &mockMailClient{messages: []imappkg.FetchedMessage{msg}}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if len(client.movedMsgs) != 1 {
+		t.Fatalf("expected 1 move on retry, got %d", len(client.movedMsgs))
+	}
+	if client.movedMsgs[0] != "Expired" {
+		t.Errorf("expected destination %q, got %q", "Expired", client.movedMsgs[0])
+	}
+
+	if client.fetchBodyCalls != 0 {
+		t.Errorf("retry path called FetchBody %d time(s); a move_failed retry must not evaluate rules or call the LLM", client.fetchBodyCalls)
+	}
+
+	v, err := database.GetVerdictByMessageID("<retry-1@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected verdict, got nil")
+	}
+	if v.Status != "executed" {
+		t.Errorf("Status = %q, want executed", v.Status)
+	}
+	if v.ActedAt == nil {
+		t.Error("expected ActedAt to be set after a successful retry")
+	}
+
+	// Exactly one row for this message -- no duplication from the retry.
+	actLog, err := database.GetActivityLog(10)
+	if err != nil {
+		t.Fatalf("get activity log: %v", err)
+	}
+	if len(actLog) != 1 {
+		t.Fatalf("expected 1 activity entry for the recovered move, got %d", len(actLog))
+	}
+	if actLog[0].Type != "expired" {
+		t.Errorf("expected activity type %q, got %q", "expired", actLog[0].Type)
+	}
+}
+
+// TestScanCycleRetryStillFailingStaysMoveFailed verifies that a move_failed
+// verdict whose retry still fails is left as move_failed -- not flipped to
+// executed, and not duplicated -- so the next scan tries again.
+func TestScanCycleRetryStillFailingStaysMoveFailed(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := database.SaveVerdict(db.Verdict{
+		AccountID:         "acct1",
+		MessageIDHeader:   "<retry-2@test>",
+		Subject:           "Your OTP Code",
+		Sender:            "security@example.com",
+		SentAt:            now.Add(-3 * time.Hour),
+		Status:            "move_failed",
+		DestinationFolder: "Expired",
+		Reason:            "matched ttl rule",
+		Confidence:        1.0,
+		EvaluatedAt:       now,
+	}); err != nil {
+		t.Fatalf("save existing move_failed verdict: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       10,
+		MessageID: "<retry-2@test>",
+		Subject:   "Your OTP Code",
+		Sender:    "security@example.com",
+		Date:      now.Add(-3 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	client := &mockMailClient{
+		messages: []imappkg.FetchedMessage{msg},
+		moveErr:  errors.New("IMAP MOVE failed: mailbox is read-only"),
+	}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("expected 0 recorded moves, got %d", len(client.movedMsgs))
+	}
+
+	v, err := database.GetVerdictByMessageID("<retry-2@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected verdict, got nil")
+	}
+	if v.Status != "move_failed" {
+		t.Errorf("Status = %q, want move_failed (still failing)", v.Status)
+	}
+	if v.ActedAt != nil {
+		t.Error("ActedAt should remain nil while the move keeps failing")
+	}
+
+	actLog, err := database.GetActivityLog(10)
+	if err != nil {
+		t.Fatalf("get activity log: %v", err)
+	}
+	if len(actLog) != 0 {
+		t.Errorf("expected 0 activity entries for a still-failing retry, got %d", len(actLog))
 	}
 }
 

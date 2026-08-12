@@ -88,13 +88,20 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				continue
 			}
 
-			// Skip if verdict already exists.
+			// Skip if verdict already exists. move_failed is the one
+			// exception: retry the move itself (cheap IMAP calls, no rule
+			// re-evaluation, no LLM spend) using the destination already
+			// captured on the failed attempt, then skip either way — this
+			// scan cycle does not re-run evaluation for this message.
 			existing, err := s.db.GetVerdictByMessageID(msg.MessageID)
 			if err != nil {
 				log.Printf("scanner: check existing verdict for %q: %v", msg.MessageID, err)
 				continue
 			}
 			if existing != nil {
+				if existing.Status == "move_failed" {
+					s.retryFailedMove(client, accountID, &msg, existing, expiredFolder)
+				}
 				continue
 			}
 
@@ -149,12 +156,17 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				// reclaim it, and DetectManualClassifications ignores the
 				// status so an ambiguous success -- MOVE succeeded, error
 				// returned anyway -- is not read back as a user filing.
-				moveErr := client.EnsureFolder(dest)
-				if moveErr == nil {
+				ensureErr := client.EnsureFolder(dest)
+				moveErr := ensureErr
+				if ensureErr == nil {
 					moveErr = client.MoveMessage(msg.Folder, msg.UID, dest)
 				}
 				if moveErr != nil {
-					log.Printf("scanner: move %q to %q failed: %v; recording move_failed for retry", msg.MessageID, dest, moveErr)
+					if ensureErr != nil {
+						log.Printf("scanner: ensure folder %q failed for %q: %v; recording move_failed for retry", dest, msg.MessageID, ensureErr)
+					} else {
+						log.Printf("scanner: move %q to %q failed: %v; recording move_failed for retry", msg.MessageID, dest, moveErr)
+					}
 					v.Status = "move_failed"
 					v.DestinationFolder = dest
 					if err := s.db.SaveVerdict(v); err != nil {
@@ -207,6 +219,71 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 	}
 
 	return nil
+}
+
+// retryFailedMove re-attempts the IMAP move for a verdict already persisted
+// as move_failed. It does no rule evaluation and makes no LLM call: the
+// destination was already resolved and captured on the original failed
+// attempt (existing.DestinationFolder), so everything the retry needs is
+// already in the row. This keeps the "bounded" property of the design —
+// the expensive call never repeats — while a stuck move self-heals for the
+// cost of one cheap IMAP round trip per scan cycle.
+//
+// On success the verdict flips to executed and an activity entry is logged,
+// consistent with the normal auto-execute success path. On failure it is
+// left as move_failed for the next scan to retry again.
+func (s *Scanner) retryFailedMove(client MailClient, accountID string, msg *imappkg.FetchedMessage, existing *db.Verdict, expiredFolder string) {
+	dest := existing.DestinationFolder
+	if dest == "" {
+		log.Printf("scanner: move_failed verdict for %q has no destination folder recorded; cannot retry", msg.MessageID)
+		return
+	}
+
+	ensureErr := client.EnsureFolder(dest)
+	moveErr := ensureErr
+	if ensureErr == nil {
+		moveErr = client.MoveMessage(msg.Folder, msg.UID, dest)
+	}
+	if moveErr != nil {
+		if ensureErr != nil {
+			log.Printf("scanner: retry ensure folder %q failed for %q: %v; still move_failed", dest, msg.MessageID, ensureErr)
+		} else {
+			log.Printf("scanner: retry move %q to %q failed: %v; still move_failed", msg.MessageID, dest, moveErr)
+		}
+		return
+	}
+
+	log.Printf("scanner: recovered move_failed for %q -> %q", msg.MessageID, dest)
+
+	actedAt := time.Now().UTC()
+	v := *existing
+	v.Status = "executed"
+	v.ActedAt = &actedAt
+	v.DestinationFolder = dest
+
+	if err := s.db.SaveVerdict(v); err != nil {
+		log.Printf("scanner: save recovered verdict for %q: %v", msg.MessageID, err)
+		return
+	}
+
+	activityType := "triaged"
+	if dest != "" && (dest == expiredFolder || dest == "Expired") {
+		activityType = "expired"
+	}
+
+	if err := s.db.LogActivity(db.ActivityEntry{
+		Type:            activityType,
+		AccountID:       accountID,
+		MessageIDHeader: msg.MessageID,
+		Subject:         existing.Subject,
+		Sender:          existing.Sender,
+		RuleName:        "Retry: recovered move_failed verdict",
+		Destination:     dest,
+		Reason:          existing.Reason,
+		Confidence:      existing.Confidence,
+	}); err != nil {
+		log.Printf("scanner: log recovered move activity for %q: %v", msg.MessageID, err)
+	}
 }
 
 // originalSenderHeaders lists headers checked (in priority order) for the real
