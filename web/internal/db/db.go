@@ -188,9 +188,11 @@ func (d *DB) migrate() error {
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS llm_cache (
-			message_id_header   TEXT PRIMARY KEY,
-			verdict             JSON,
-			cached_at           TIMESTAMP
+			message_id_header TEXT NOT NULL,
+			cache_key         TEXT NOT NULL DEFAULT '',
+			verdict           JSON NOT NULL,
+			cached_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (message_id_header, cache_key)
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS training_examples (
@@ -242,8 +244,12 @@ func (d *DB) migrate() error {
 // already run.
 func (d *DB) applyOneShotMigrations() error {
 	type oneShot struct {
-		key string
+		key  string
 		stmt string
+		// fn, when set, runs instead of stmt. Used by migrations that need
+		// more than a single unconditional statement (e.g. probing the
+		// schema first).
+		fn func(*DB) error
 	}
 	migrations := []oneShot{
 		// 2026-04-29 expiry redesign: the multi-classify and analysis prompts
@@ -265,6 +271,15 @@ func (d *DB) applyOneShotMigrations() error {
 			VALUES ('expired', 'Expired', 'Expired', '⏰', '#888888', datetime('now'))
 			ON CONFLICT(id) DO NOTHING
 		`},
+
+		/* 2026-08-12: llm_cache keyed on message_id_header alone, so a model
+		swap left the previous model's verdicts authoritative, and the
+		analysis and classify prompt paths overwrote each other's row for the
+		same message. Rebuild with a (message_id_header, cache_key) primary
+		key. Fresh databases already have this shape from the base schema
+		(see the CREATE TABLE above), so migrateLLMCacheCompositeKey probes
+		before touching anything. */
+		{key: "v4_llm_cache_composite_key", fn: (*DB).migrateLLMCacheCompositeKey},
 	}
 
 	for _, m := range migrations {
@@ -277,13 +292,73 @@ func (d *DB) applyOneShotMigrations() error {
 			return fmt.Errorf("check schema_meta %q: %w", m.key, err)
 		}
 
-		if _, err := d.Exec(m.stmt); err != nil {
+		if m.fn != nil {
+			if err := m.fn(d); err != nil {
+				return fmt.Errorf("run migration %q: %w", m.key, err)
+			}
+		} else if _, err := d.Exec(m.stmt); err != nil {
 			return fmt.Errorf("run migration %q: %w", m.key, err)
 		}
 		if _, err := d.Exec(`INSERT INTO schema_meta (key, value) VALUES (?, ?)`, m.key, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("record migration %q: %w", m.key, err)
 		}
 		log.Printf("db: applied one-shot migration %q", m.key)
+	}
+	return nil
+}
+
+// migrateLLMCacheCompositeKey rebuilds llm_cache with a (message_id_header,
+// cache_key) primary key so the analysis and classify prompt paths, and
+// answers from different models, coexist instead of overwriting each other.
+// Fresh databases already have this shape from the base schema, so the
+// migration probes PRAGMA table_info for the cache_key column before doing
+// anything: applyOneShotMigrations runs after the CREATE TABLE block, and an
+// unconditional rebuild would run against a table that is already correct.
+func (d *DB) migrateLLMCacheCompositeKey() error {
+	var hasCacheKey bool
+	rows, err := d.Query(`PRAGMA table_info(llm_cache)`)
+	if err != nil {
+		return fmt.Errorf("probe llm_cache schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan llm_cache schema: %w", err)
+		}
+		if name == "cache_key" {
+			hasCacheKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate llm_cache schema: %w", err)
+	}
+	if hasCacheKey {
+		return nil // fresh DB, or already migrated
+	}
+
+	/* Existing rows came from a single model and the analysis prompt path
+	only. Drop them rather than guessing a cache_key for each: they are at
+	most 7 days of cached answers, and a wrong guess would serve one prompt
+	path another's answer, which is worse than a cold cache. */
+	if _, err := d.Exec(`DROP TABLE IF EXISTS llm_cache`); err != nil {
+		return fmt.Errorf("drop old llm_cache: %w", err)
+	}
+	_, err = d.Exec(`
+		CREATE TABLE llm_cache (
+			message_id_header TEXT NOT NULL,
+			cache_key         TEXT NOT NULL DEFAULT '',
+			verdict           JSON NOT NULL,
+			cached_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (message_id_header, cache_key)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("rebuild llm_cache: %w", err)
 	}
 	return nil
 }

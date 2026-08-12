@@ -310,6 +310,23 @@ func extractOriginalSender(headers map[string][]string) string {
 // threshold for verdicts (scanner.go ScanAccount: confidence >= 0.7).
 const minExpiryConfidence = 0.7
 
+// llmCacheKey identifies which model and which prompt produced a cached
+// answer. Both are required: the analysis and classify prompts return
+// different shapes for the same message, and a model change invalidates
+// both -- see db.GetCachedVerdict/SetCachedVerdict.
+func (s *Scanner) llmCacheKey(promptKind string) string {
+	var model string
+	switch strings.ToLower(s.cfg.LLM.Provider) {
+	case "gemini":
+		model = "gemini:" + s.cfg.LLM.Gemini.Model
+	case "ollama":
+		model = "ollama:" + s.cfg.LLM.Ollama.Model
+	default:
+		model = s.cfg.LLM.Provider
+	}
+	return model + "|" + promptKind
+}
+
 // canonicalExpiredFolder returns the IMAP folder name configured as the
 // canonical "Expired" destination, or empty string if none is configured.
 // Looked up from db.GetCategories() (the "expired" category id).
@@ -624,8 +641,27 @@ func buildClassifyVerdict(result *llm.LLMResponse, currentRule db.Rule, byCatego
 }
 
 // evaluateMultiClassify runs a single LLM call that classifies a message into
-// one of several categories. This replaces N separate llm-classify calls with one.
+// one of several categories. This replaces N separate llm-classify calls with
+// one, and caches the result under the "classify" prompt kind: without this,
+// a message that never cleanly classifies gets re-sent to the LLM on every
+// scan for the whole lookback window.
 func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, classifyRules []db.Rule) (*llm.LLMResponse, error) {
+	cacheKey := s.llmCacheKey("classify")
+
+	cached, err := s.db.GetCachedVerdict(msg.MessageID, cacheKey)
+	if err != nil {
+		return nil, fmt.Errorf("get cached verdict: %w", err)
+	}
+	if cached != nil {
+		return &llm.LLMResponse{
+			Category:   cached.Category,
+			ExpiresAt:  cached.ExpiresAt,
+			Reason:     cached.Reason,
+			Confidence: cached.Confidence,
+			Matches:    cached.Classified,
+		}, nil
+	}
+
 	body, fetchErr := client.FetchBody(msg.Folder, msg.UID)
 	if fetchErr != nil {
 		log.Printf("scanner: multi-classify fetch body uid=%d: %v", msg.UID, fetchErr)
@@ -679,7 +715,25 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 	systemPrompt, userContent := llm.BuildMultiClassificationPrompt(msgData, categories, refs)
 	result, err := llm.CallLLM(ctx, &s.cfg.LLM, systemPrompt, userContent)
 	if err != nil {
+		// Cache the failure too: without this, a message that fails to
+		// classify (LLM outage, malformed response) gets retried on every
+		// scan instead of backing off for the error TTL.
+		if cacheErr := s.db.SetCachedVerdict(msg.MessageID, cacheKey, db.CachedVerdict{Error: err.Error()}); cacheErr != nil {
+			log.Printf("scanner: cache multi-classify error for %q: %v", msg.MessageID, cacheErr)
+		}
 		return nil, fmt.Errorf("call llm: %w", err)
+	}
+
+	matched := result.Category != "" && !strings.EqualFold(result.Category, "none")
+	cv := db.CachedVerdict{
+		Classified: matched,
+		Category:   result.Category,
+		ExpiresAt:  result.ExpiresAt,
+		Reason:     result.Reason,
+		Confidence: result.Confidence,
+	}
+	if err := s.db.SetCachedVerdict(msg.MessageID, cacheKey, cv); err != nil {
+		log.Printf("scanner: cache multi-classify verdict for %q: %v", msg.MessageID, err)
 	}
 
 	return result, nil
@@ -696,7 +750,9 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 //     re-evaluate from cache and produce the verdict)
 //   - no deadline → nil
 func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, rule db.Rule, expiredFolder string) (*rules.RuleVerdict, error) {
-	cached, err := s.db.GetCachedVerdict(msg.MessageID)
+	cacheKey := s.llmCacheKey("analysis")
+
+	cached, err := s.db.GetCachedVerdict(msg.MessageID, cacheKey)
 	if err != nil {
 		return nil, fmt.Errorf("get cached verdict: %w", err)
 	}
@@ -749,7 +805,7 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 
 		result, err = llm.CallLLM(ctx, &s.cfg.LLM, systemPrompt, userContent)
 		if err != nil {
-			_ = s.db.SetCachedVerdict(msg.MessageID, db.CachedVerdict{Error: err.Error()})
+			_ = s.db.SetCachedVerdict(msg.MessageID, cacheKey, db.CachedVerdict{Error: err.Error()})
 			return nil, fmt.Errorf("call llm: %w", err)
 		}
 
@@ -758,7 +814,7 @@ func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imapp
 			Reason:     result.Reason,
 			Confidence: result.Confidence,
 		}
-		if err := s.db.SetCachedVerdict(msg.MessageID, cv); err != nil {
+		if err := s.db.SetCachedVerdict(msg.MessageID, cacheKey, cv); err != nil {
 			log.Printf("scanner: cache verdict for %q: %v", msg.MessageID, err)
 		}
 	}

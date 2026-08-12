@@ -126,7 +126,10 @@ func TestBackfillClearsCachedVerdict(t *testing.T) {
 	const staleReason = "stale verdict from the previous model"
 	const freshReason = "fresh verdict from the local test server"
 
-	if err := database.SetCachedVerdict("<msg-1@test>", db.CachedVerdict{
+	// Matches the key evaluateLLM builds via Scanner.llmCacheKey("analysis")
+	// for the "ollama" provider / "test-model" configured below.
+	const staleCacheKey = "ollama:test-model|analysis"
+	if err := database.SetCachedVerdict("<msg-1@test>", staleCacheKey, db.CachedVerdict{
 		ExpiresAt:  staleExpiresAt.Format(time.RFC3339),
 		Reason:     staleReason,
 		Confidence: 0.9,
@@ -202,7 +205,7 @@ func TestBackfillClearsCachedVerdict(t *testing.T) {
 		t.Errorf("Reason = %q, want the fresh evaluation's reason %q", v.Reason, freshReason)
 	}
 
-	cached, err := database.GetCachedVerdict("<msg-1@test>")
+	cached, err := database.GetCachedVerdict("<msg-1@test>", staleCacheKey)
 	if err != nil {
 		t.Fatalf("GetCachedVerdict: %v", err)
 	}

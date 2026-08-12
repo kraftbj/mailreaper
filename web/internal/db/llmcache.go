@@ -15,6 +15,7 @@ import (
 // decide whether a deadline has passed — that comparison is done in Go.
 type CachedVerdict struct {
 	Classified bool    `json:"classified,omitempty"`
+	Category   string  `json:"category,omitempty"`
 	ExpiresAt  string  `json:"expiresAt,omitempty"`
 	Reason     string  `json:"reason,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
@@ -36,17 +37,20 @@ func (cv *CachedVerdict) ttl() time.Duration {
 	return 7 * 24 * time.Hour
 }
 
-// GetCachedVerdict retrieves a cached LLM verdict for the given Message-ID header.
+// GetCachedVerdict retrieves a cached LLM verdict for the given Message-ID
+// header and cache key. cacheKey scopes the lookup to a provider, model, and
+// prompt kind (see Scanner.llmCacheKey) so the analysis and classify prompt
+// paths, and answers from different models, never read each other's row.
 // Returns nil (no error) if there is no cached entry or if it has expired.
-func (d *DB) GetCachedVerdict(messageIDHeader string) (*CachedVerdict, error) {
+func (d *DB) GetCachedVerdict(messageIDHeader, cacheKey string) (*CachedVerdict, error) {
 	var verdictJSON string
 	var cachedAtStr string
 
 	err := d.QueryRow(`
 		SELECT verdict, cached_at
 		FROM llm_cache
-		WHERE message_id_header = ?
-	`, messageIDHeader).Scan(&verdictJSON, &cachedAtStr)
+		WHERE message_id_header = ? AND cache_key = ?
+	`, messageIDHeader, cacheKey).Scan(&verdictJSON, &cachedAtStr)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -66,35 +70,48 @@ func (d *DB) GetCachedVerdict(messageIDHeader string) (*CachedVerdict, error) {
 	}
 
 	if time.Since(cachedAt) > cv.ttl() {
-		// Expired — remove it and return a miss.
-		_ = d.RemoveCachedVerdict(messageIDHeader)
+		// Expired — remove just this row and return a miss. Other
+		// (message_id_header, cache_key) rows for the same message are
+		// unrelated prompt kinds/models and must survive.
+		_, err := d.Exec(`DELETE FROM llm_cache WHERE message_id_header = ? AND cache_key = ?`, messageIDHeader, cacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("db: remove expired cached verdict: %w", err)
+		}
 		return nil, nil
 	}
 
 	return &cv, nil
 }
 
-// SetCachedVerdict upserts a cached verdict for the given Message-ID header.
-func (d *DB) SetCachedVerdict(messageIDHeader string, cv CachedVerdict) error {
+// SetCachedVerdict upserts a cached verdict for the given Message-ID header
+// and cache key. There is no cross-key deletion here: a different cache key
+// (different model or prompt kind) is simply a different row, not something
+// this write should ever clobber.
+func (d *DB) SetCachedVerdict(messageIDHeader, cacheKey string, cv CachedVerdict) error {
 	verdictJSON, err := json.Marshal(cv)
 	if err != nil {
 		return fmt.Errorf("db: marshal cached verdict: %w", err)
 	}
 
 	_, err = d.Exec(`
-		INSERT INTO llm_cache (message_id_header, verdict, cached_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(message_id_header) DO UPDATE SET
+		INSERT INTO llm_cache (message_id_header, cache_key, verdict, cached_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(message_id_header, cache_key) DO UPDATE SET
 			verdict   = excluded.verdict,
 			cached_at = excluded.cached_at
-	`, messageIDHeader, string(verdictJSON), formatDBTime(time.Now().UTC()))
+	`, messageIDHeader, cacheKey, string(verdictJSON), formatDBTime(time.Now().UTC()))
 	if err != nil {
 		return fmt.Errorf("db: set cached verdict: %w", err)
 	}
 	return nil
 }
 
-// RemoveCachedVerdict deletes the cached verdict for the given Message-ID header.
+// RemoveCachedVerdict deletes every cached verdict for the given Message-ID
+// header, across all cache keys (every prompt kind, every model that has
+// ever answered about this message). Callers that want "re-ask the LLM about
+// this message" — the only current use, backfill — need every prompt path
+// invalidated, not just one; a single-key deletion would leave a stale
+// classify (or analysis) answer in place for the next scan to serve.
 func (d *DB) RemoveCachedVerdict(messageIDHeader string) error {
 	_, err := d.Exec(`DELETE FROM llm_cache WHERE message_id_header = ?`, messageIDHeader)
 	if err != nil {

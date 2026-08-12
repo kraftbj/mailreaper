@@ -3,6 +3,9 @@ package scanner
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -739,5 +742,88 @@ func TestDetectManualClassificationsIgnoresMoveFailed(t *testing.T) {
 	}
 	if len(actLog) != 0 {
 		t.Errorf("expected 0 activity entries, got %d", len(actLog))
+	}
+}
+
+// TestMultiClassifyCacheHitReconstructsCategory proves the classify cache
+// round-trips a real category rather than just producing a hit/miss. Seed a
+// classify cache entry under the exact key evaluateMultiClassify looks up
+// (provider + model + "classify"), point the LLM at a server that fails the
+// test if it is ever hit, and verify the message still routes to the
+// category's folder. A cache hit that could not reconstruct Category would
+// leave buildClassifyVerdict with nothing to route on -- the failure this
+// test guards against.
+func TestMultiClassifyCacheHitReconstructsCategory(t *testing.T) {
+	database := openTestDB(t)
+
+	var llmCalls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&llmCalls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "ollama",
+		Ollama:   config.OllamaConfig{Endpoint: ts.URL, Model: "test-model"},
+	}
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotion",
+		Name:       "Promotion",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-promo",
+		Name:              "Promotions",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "llm-classify", Category: "promotion"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<promo-cached@test>",
+		Subject:   "Big sale",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-2 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	// Matches the key evaluateMultiClassify builds via
+	// Scanner.llmCacheKey("classify") for provider "ollama" / model
+	// "test-model".
+	const classifyCacheKey = "ollama:test-model|classify"
+	if err := database.SetCachedVerdict(msg.MessageID, classifyCacheKey, db.CachedVerdict{
+		Classified: true,
+		Category:   "promotion",
+		Reason:     "cached: looks like a sale",
+		Confidence: 0.9,
+	}); err != nil {
+		t.Fatalf("seed cached verdict: %v", err)
+	}
+
+	client := &mockMailClient{messages: []imappkg.FetchedMessage{msg}}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&llmCalls); got != 0 {
+		t.Errorf("LLM server called %d times, want 0 -- a classify cache hit must not call the LLM", got)
+	}
+	if len(client.movedMsgs) != 1 || client.movedMsgs[0] != "Folders/AI-Triage/Promotions" {
+		t.Errorf("movedMsgs = %v, want a single move to Folders/AI-Triage/Promotions -- the cached Category was not reconstructed", client.movedMsgs)
 	}
 }
