@@ -104,6 +104,15 @@ server:
 | POST | `/api/scan` | Trigger a scan |
 | POST | `/api/rescan` | Clear all verdicts and full rescan |
 
+There is no authentication on this API. To close cross-origin CSRF exposure,
+non-GET requests must send `Content-Type: application/json` and, when the
+browser sets it, a same-origin (or absent) `Sec-Fetch-Site` header. The
+bundled dashboard already does this. A curl invocation or script that POSTs
+or DELETEs without setting `Content-Type: application/json` will now get a
+403 -- add that header to any external client. This is a mitigation against
+browser-driven attacks, not authentication; anything that can reach
+`localhost:8025` directly can still call the API.
+
 ## How It Learns
 
 1. **Manual classification**: Drag a message to a triage folder. The next scan detects it, records a training example, and the LLM uses it as a few-shot reference.

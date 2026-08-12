@@ -12,6 +12,7 @@ import (
 type Server struct {
 	db                *db.DB
 	mux               *http.ServeMux
+	handler           http.Handler // mux wrapped with withSameOrigin; always serve this, never mux directly
 	port              int
 	OnScanRequested   func()     // called when user clicks "Scan Now"
 	OnRescanRequested func() // full rescan: no lookback limit, no message cap
@@ -25,19 +26,20 @@ func NewServer(database *db.DB, port int) *Server {
 		port: port,
 	}
 	s.registerRoutes()
+	s.handler = withSameOrigin(s.mux)
 	return s
 }
 
 // ServeHTTP implements http.Handler so the server can be used with httptest.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	s.handler.ServeHTTP(w, r)
 }
 
 // Start begins listening on the configured port. It blocks until the context
 // is cancelled, then gracefully shuts down the server.
 func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.port)
-	httpSrv := &http.Server{Addr: addr, Handler: s.mux}
+	httpSrv := &http.Server{Addr: addr, Handler: s.handler}
 
 	go func() {
 		<-ctx.Done()
