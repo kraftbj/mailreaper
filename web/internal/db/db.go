@@ -80,15 +80,14 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("db: create directory: %w", err)
 	}
 
-	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000"
+	/* modernc.org/sqlite takes per-connection pragmas as _pragma=name(value);
+	it silently ignores the _journal_mode / _busy_timeout spellings used by
+	mattn/go-sqlite3. Setting them in the DSN applies them to every pooled
+	connection, which a one-off PRAGMA Exec does not. */
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open: %w", err)
-	}
-
-	if _, err := sqlDB.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("db: enable foreign keys: %w", err)
 	}
 
 	d := &DB{sqlDB}
