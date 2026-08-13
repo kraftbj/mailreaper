@@ -183,6 +183,11 @@ func runFullScan(ctx context.Context, scan *scanner.Scanner, cfg *config.Config)
 		log.Printf("scan: DistillRules: %v", err)
 	}
 
+	server.PublishEvent("scan_complete", map[string]any{
+		"accounts":   len(cfg.Accounts),
+		"finishedAt": time.Now().UTC().Format(time.RFC3339),
+	})
+
 	log.Printf("scan: full scan complete")
 }
 
