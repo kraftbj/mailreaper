@@ -300,3 +300,206 @@ func TestBackfillNilVerdictFromLLMFailureDoesNotRescue(t *testing.T) {
 		t.Errorf("moved %d message(s) on a nil verdict from an LLM outage", len(client.movedMsgs))
 	}
 }
+
+// TestBackfillMovesReclassifiedMessage exercises the orchestration loop
+// itself, not just the pure backfillDestination helper: a message sitting in
+// one triage folder is re-evaluated against a "classify" rule (deterministic,
+// confidence 1.0 -- see rules.EvaluateClassify) whose destination is a
+// different folder, and the backfill must actually call EnsureFolder /
+// MoveMessage and persist an "executed" verdict at the new destination.
+func TestBackfillMovesReclassifiedMessage(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "notifications",
+		Name:       "Notifications",
+		FolderName: "Folders/AI-Triage/Notifications",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotions",
+		Name:       "Promotions",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-classify-promo",
+		Name:              "Promotions classify",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "classify", Category: "promotions"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<backfill-move@test>",
+		Subject:   "Big sale",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-48 * time.Hour),
+		Folder:    "Folders/AI-Triage/Notifications",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Notifications": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	stats, err := s.BackfillFolders(context.Background(), client, "acct1", "INBOX")
+	if err != nil {
+		t.Fatalf("BackfillFolders: %v", err)
+	}
+
+	if stats.Moved != 1 {
+		t.Errorf("stats.Moved = %d, want 1", stats.Moved)
+	}
+	if len(client.movedMsgs) != 1 || client.movedMsgs[0] != "Folders/AI-Triage/Promotions" {
+		t.Errorf("movedMsgs = %v, want a single move to Folders/AI-Triage/Promotions", client.movedMsgs)
+	}
+
+	v, err := database.GetVerdictByMessageID("<backfill-move@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a saved verdict, got nil")
+	}
+	if v.Status != "executed" {
+		t.Errorf("Status = %q, want executed", v.Status)
+	}
+	if v.DestinationFolder != "Folders/AI-Triage/Promotions" {
+		t.Errorf("DestinationFolder = %q, want Folders/AI-Triage/Promotions", v.DestinationFolder)
+	}
+}
+
+// TestBackfillLowConfidenceLeavesMessageInPlace proves the orchestration
+// loop's own confidence < 0.7 gate (backfill.go, not the pure
+// backfillDestination helper) is exercised: a real "llm-classify" call
+// returns a matched category at confidence 0.5, which is enough for
+// buildClassifyVerdict to return a non-nil Classified verdict (it only
+// rejects Confidence <= 0), so the low-confidence rejection has to happen in
+// BackfillFolders itself. A cached verdict cannot be pre-seeded for this,
+// because BackfillFolders unconditionally calls RemoveCachedVerdict before
+// evaluating (see backfill.go) -- so the LLM must actually be called, via
+// the same httptest.Server pattern as the other backfill LLM tests.
+func TestBackfillLowConfidenceLeavesMessageInPlace(t *testing.T) {
+	database := openTestDB(t)
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "notifications",
+		Name:       "Notifications",
+		FolderName: "Folders/AI-Triage/Notifications",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotions",
+		Name:       "Promotions",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-llm-classify-promo",
+		Name:              "Promotions llm-classify",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "llm-classify", Category: "promotions"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	var llmCalls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&llmCalls, 1)
+		content, err := json.Marshal(struct {
+			Category   string  `json:"category"`
+			Reason     string  `json:"reason"`
+			Confidence float64 `json:"confidence"`
+		}{
+			Category:   "promotions",
+			Reason:     "looks promotional but not sure",
+			Confidence: 0.5,
+		})
+		if err != nil {
+			t.Fatalf("marshal fake LLM content: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(fakeOllamaResponse{
+			Message: fakeOllamaMessage{Role: "assistant", Content: string(content)},
+		}); err != nil {
+			t.Fatalf("encode fake ollama response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "ollama",
+		Ollama:   config.OllamaConfig{Endpoint: ts.URL, Model: "test-model"},
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<backfill-lowconf@test>",
+		Subject:   "Maybe a sale?",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-48 * time.Hour),
+		Folder:    "Folders/AI-Triage/Notifications",
+	}
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Notifications": {msg},
+		},
+	}
+	s := New(database, cfg)
+
+	stats, err := s.BackfillFolders(context.Background(), client, "acct1", "INBOX")
+	if err != nil {
+		t.Fatalf("BackfillFolders: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&llmCalls); got != 1 {
+		t.Fatalf("LLM server called %d times, want 1 -- test did not exercise the real classify path", got)
+	}
+	if stats.Skipped != 1 {
+		t.Errorf("stats.Skipped = %d, want 1", stats.Skipped)
+	}
+	if stats.Moved != 0 {
+		t.Errorf("stats.Moved = %d, want 0 -- confidence 0.5 is below the 0.7 auto-execute threshold", stats.Moved)
+	}
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("moved %d message(s) despite low confidence", len(client.movedMsgs))
+	}
+
+	v, err := database.GetVerdictByMessageID("<backfill-lowconf@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a saved verdict, got nil")
+	}
+	if v.Status != "pending" {
+		t.Errorf("Status = %q, want pending", v.Status)
+	}
+	if v.DestinationFolder != "Folders/AI-Triage/Notifications" {
+		t.Errorf("DestinationFolder = %q, want unchanged Folders/AI-Triage/Notifications", v.DestinationFolder)
+	}
+}
