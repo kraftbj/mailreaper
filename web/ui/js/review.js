@@ -6,6 +6,10 @@ import { api, connectSSE, timeAgo, fmtConfidence } from "./app.js";
 let allVerdicts = [];
 let closeSSE = null;
 
+// DOM state cannot carry the in-flight flag: an SSE repaint replaces the
+// buttons mid-request and resurrects them enabled. Track by verdict ID.
+const inFlight = new Set();
+
 async function loadVerdicts() {
   allVerdicts = await api("/api/verdicts/pending").catch(() => []);
   renderTable();
@@ -41,6 +45,7 @@ function renderTable() {
   tbody.innerHTML = rows.map((v) => {
     const conf = v.confidence ?? 0;
     const confPct = Math.round(conf * 100);
+    const busy = inFlight.has(v.messageIdHeader) ? " disabled" : "";
     return `
       <tr>
         <td style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(v.subject)}">${esc(v.subject || "(no subject)")}</td>
@@ -55,8 +60,8 @@ function renderTable() {
         </td>
         <td>
           <div class="flex gap-8">
-            <button class="btn btn-sm btn-success" data-action="approve" data-id="${esc(v.messageIdHeader)}">Approve</button>
-            <button class="btn btn-sm btn-danger"  data-action="reject"  data-id="${esc(v.messageIdHeader)}">Reject</button>
+            <button class="btn btn-sm btn-success" data-action="approve" data-id="${esc(v.messageIdHeader)}"${busy}>Approve</button>
+            <button class="btn btn-sm btn-danger"  data-action="reject"  data-id="${esc(v.messageIdHeader)}"${busy}>Reject</button>
           </div>
         </td>
       </tr>
@@ -64,12 +69,19 @@ function renderTable() {
   }).join("");
 }
 
-async function updateVerdict(msgId, status) {
-  await api(`/api/verdicts/${encodeURIComponent(msgId)}/status`, {
-    method: "PUT",
-    body: JSON.stringify({ status }),
-  });
-  await loadVerdicts();
+async function updateVerdict(messageId, status) {
+  if (inFlight.has(messageId)) return;
+  inFlight.add(messageId);
+  renderTable();
+  try {
+    await api(`/api/verdicts/${encodeURIComponent(messageId)}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    });
+  } finally {
+    inFlight.delete(messageId);
+    await loadVerdicts();
+  }
 }
 
 async function batchApprove() {
@@ -83,15 +95,7 @@ async function batchApprove() {
   const btn = document.getElementById("batch-approve-btn");
   if (btn) btn.disabled = true;
   try {
-    await Promise.all(
-      eligible.map((v) =>
-        api(`/api/verdicts/${encodeURIComponent(v.messageIdHeader)}/status`, {
-          method: "PUT",
-          body: JSON.stringify({ status: "approved" }),
-        })
-      )
-    );
-    await loadVerdicts();
+    await Promise.all(eligible.map((v) => updateVerdict(v.messageIdHeader, "approved")));
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -113,17 +117,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("batch-approve-btn")?.addEventListener("click", batchApprove);
 
-  document.getElementById("verdict-tbody")?.addEventListener("click", async (e) => {
+  document.getElementById("verdict-tbody")?.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
     const id = btn.dataset.id;
-    btn.disabled = true;
-    try {
-      await updateVerdict(id, action === "approve" ? "approved" : "rejected");
-    } finally {
-      btn.disabled = false;
-    }
+    /* updateVerdict tracks in-flight state itself (see `inFlight`) and
+    re-renders immediately so the button disables even before this call
+    resolves; no manual disable/enable needed here. */
+    updateVerdict(id, action === "approve" ? "approved" : "rejected");
   });
 
   closeSSE = connectSSE(({ type }) => {
