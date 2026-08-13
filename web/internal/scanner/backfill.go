@@ -157,6 +157,9 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			log.Printf("backfill: moved %q from %q to %q", msg.Subject, folder, dest)
 			stats.Moved++
 			saveBackfillVerdict(s.db, accountID, &msg, dest, verdict, "executed")
+			if err := s.db.RecordPlacement(msg.MessageID, dest); err != nil {
+				log.Printf("backfill: record placement for %q: %v", msg.MessageID, err)
+			}
 
 			activityType := "triaged"
 			if verdict != nil && verdict.Expired {

@@ -224,6 +224,13 @@ func (d *DB) migrate() error {
 			key   TEXT PRIMARY KEY,
 			value TEXT
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS placements (
+			message_id_header TEXT NOT NULL,
+			folder            TEXT NOT NULL,
+			placed_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (message_id_header, folder)
+		)`,
 	}
 
 	for _, stmt := range stmts {
@@ -283,6 +290,15 @@ func (d *DB) applyOneShotMigrations() error {
 		(see the CREATE TABLE above), so migrateLLMCacheCompositeKey probes
 		before touching anything. */
 		{key: "v4_llm_cache_composite_key", fn: (*DB).migrateLLMCacheCompositeKey},
+
+		/* 2026-08-12: a durable record of every message MailReaper moved on
+		its own, consulted by DetectManualClassifications so a full verdict
+		clear (ClearAllVerdicts / POST /api/rescan) can no longer be read
+		back as "the user filed this" for a message MailReaper placed there
+		itself. Fresh databases already have the placements table from the
+		base schema (see the CREATE TABLE above), so migratePlacements
+		probes before creating anything. */
+		{key: "v5_placements", fn: (*DB).migratePlacements},
 	}
 
 	for _, m := range migrations {
@@ -369,6 +385,37 @@ func (d *DB) migrateLLMCacheCompositeKey() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("rebuild llm_cache: %w", err)
+	}
+	return nil
+}
+
+// migratePlacements is a safety net, not the primary path: fresh databases
+// and any database that has already run migrate() once get the placements
+// table from the base CREATE TABLE block above, which runs before
+// applyOneShotMigrations. This probes sqlite_master and only creates the
+// table if it is somehow still missing, then records v5_placements in
+// schema_meta either way so the migration ledger reflects when this
+// feature shipped.
+func (d *DB) migratePlacements() error {
+	var name string
+	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'placements'`).Scan(&name)
+	if err == nil {
+		return nil // already exists
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("probe placements table: %w", err)
+	}
+
+	_, err = d.Exec(`
+		CREATE TABLE placements (
+			message_id_header TEXT NOT NULL,
+			folder            TEXT NOT NULL,
+			placed_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (message_id_header, folder)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create placements table: %w", err)
 	}
 	return nil
 }

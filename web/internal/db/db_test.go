@@ -29,6 +29,7 @@ func TestOpenAndMigrate(t *testing.T) {
 		"llm_cache",
 		"training_examples",
 		"categories",
+		"placements",
 	}
 
 	for _, table := range tables {

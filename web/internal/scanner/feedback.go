@@ -137,7 +137,21 @@ func (s *Scanner) DetectManualClassifications(client MailClient, accountID strin
 				continue
 			}
 
-			// No verdict exists: the user manually placed this message.
+			placed, err := s.db.HasPlacement(msg.MessageID, cat.FolderName)
+			if err != nil {
+				log.Printf("scanner: check placement for %q: %v", msg.MessageID, err)
+				continue
+			}
+			if placed {
+				// MailReaper itself moved this message into cat.FolderName
+				// at some point. The verdict row that recorded that move
+				// may be gone (e.g. a full rescan calls ClearAllVerdicts),
+				// but the placements record survives that clear, so this
+				// is still not proof of a user filing.
+				continue
+			}
+
+			// No verdict and no recorded placement: the user manually placed this message.
 			log.Printf("scanner: manual classification detected: %q → %s", msg.Subject, cat.FolderName)
 
 			now := time.Now().UTC()

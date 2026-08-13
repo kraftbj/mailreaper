@@ -263,5 +263,130 @@ func TestGetCategories(t *testing.T) {
 	}
 }
 
+// TestRescanClearsEverything verifies POST /api/rescan clears both executed
+// and pending verdicts -- it must keep its full-clear semantics so a rescan
+// can re-evaluate messages it already acted on.
+func TestRescanClearsEverything(t *testing.T) {
+	s, d := newTestServer(t)
+
+	if err := d.UpsertAccount("acc-1", "Test Account"); err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+
+	now := time.Now().UTC()
+	executed := db.Verdict{
+		AccountID:         "acc-1",
+		MessageIDHeader:   "<executed@example.com>",
+		Subject:           "Executed verdict",
+		Sender:            "sender@example.com",
+		SentAt:            now,
+		Status:            "executed",
+		DestinationFolder: "Expired",
+		EvaluatedAt:       now,
+		ActedAt:           &now,
+	}
+	pending := db.Verdict{
+		AccountID:       "acc-1",
+		MessageIDHeader: "<pending@example.com>",
+		Subject:         "Pending verdict",
+		Sender:          "sender@example.com",
+		SentAt:          now,
+		Status:          "pending",
+		EvaluatedAt:     now,
+	}
+	if err := d.SaveVerdict(executed); err != nil {
+		t.Fatalf("SaveVerdict(executed): %v", err)
+	}
+	if err := d.SaveVerdict(pending); err != nil {
+		t.Fatalf("SaveVerdict(pending): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/rescan", nil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if got, err := d.GetVerdictByMessageID("<executed@example.com>"); err != nil {
+		t.Fatalf("GetVerdictByMessageID(executed): %v", err)
+	} else if got != nil {
+		t.Errorf("expected executed verdict to be cleared, got %+v", got)
+	}
+	if got, err := d.GetVerdictByMessageID("<pending@example.com>"); err != nil {
+		t.Fatalf("GetVerdictByMessageID(pending): %v", err)
+	} else if got != nil {
+		t.Errorf("expected pending verdict to be cleared, got %+v", got)
+	}
+}
+
+// TestRefreshPreservesExecutedVerdicts verifies POST /api/refresh clears only
+// pending verdicts, leaving executed ones (and the messages they represent)
+// alone -- the cheap path that does not force every already-acted-on message
+// back through the LLM.
+func TestRefreshPreservesExecutedVerdicts(t *testing.T) {
+	s, d := newTestServer(t)
+
+	if err := d.UpsertAccount("acc-1", "Test Account"); err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+
+	now := time.Now().UTC()
+	executed := db.Verdict{
+		AccountID:         "acc-1",
+		MessageIDHeader:   "<executed@example.com>",
+		Subject:           "Executed verdict",
+		Sender:            "sender@example.com",
+		SentAt:            now,
+		Status:            "executed",
+		DestinationFolder: "Expired",
+		EvaluatedAt:       now,
+		ActedAt:           &now,
+	}
+	pending := db.Verdict{
+		AccountID:       "acc-1",
+		MessageIDHeader: "<pending@example.com>",
+		Subject:         "Pending verdict",
+		Sender:          "sender@example.com",
+		SentAt:          now,
+		Status:          "pending",
+		EvaluatedAt:     now,
+	}
+	if err := d.SaveVerdict(executed); err != nil {
+		t.Fatalf("SaveVerdict(executed): %v", err)
+	}
+	if err := d.SaveVerdict(pending); err != nil {
+		t.Fatalf("SaveVerdict(pending): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/refresh", nil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := d.GetVerdictByMessageID("<executed@example.com>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID(executed): %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected executed verdict to survive /api/refresh, got nil")
+	}
+	if got.Status != "executed" {
+		t.Errorf("expected executed verdict status to remain %q, got %q", "executed", got.Status)
+	}
+
+	if got, err := d.GetVerdictByMessageID("<pending@example.com>"); err != nil {
+		t.Fatalf("GetVerdictByMessageID(pending): %v", err)
+	} else if got != nil {
+		t.Errorf("expected pending verdict to be cleared, got %+v", got)
+	}
+}
+
 // Ensure tests don't require an actual UI directory.
 var _ = os.DevNull

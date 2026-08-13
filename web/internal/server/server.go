@@ -16,8 +16,9 @@ type Server struct {
 	handler           http.Handler // mux wrapped with withSameOrigin; always serve this, never mux directly
 	bindAddr          string
 	port              int
-	OnScanRequested   func()     // called when user clicks "Scan Now"
-	OnRescanRequested func() // full rescan: no lookback limit, no message cap
+	OnScanRequested    func() // called when user clicks "Scan Now"
+	OnRescanRequested  func() // full rescan: no lookback limit, no message cap
+	OnRefreshRequested func() // cheap refresh: normal scan after clearing pending verdicts + LLM cache
 }
 
 // NewServer creates a Server and registers all routes on the mux.
@@ -77,6 +78,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/stats", s.handleGetStats)
 	s.mux.HandleFunc("POST /api/scan", s.handleScanNow)
 	s.mux.HandleFunc("POST /api/rescan", s.handleRescan)
+	s.mux.HandleFunc("POST /api/refresh", s.handleRefresh)
 
 	s.mux.HandleFunc("GET /api/events", s.handleSSE)
 

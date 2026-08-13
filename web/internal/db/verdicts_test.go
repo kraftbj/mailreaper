@@ -216,3 +216,46 @@ func TestGetExecutedMessageIDs(t *testing.T) {
 		t.Errorf("expected 2 executed IDs, got %d: %v", len(ids), ids)
 	}
 }
+
+func TestClearVerdictsByStatus(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.UpsertAccount("account-1", "Test Account"); err != nil {
+		t.Fatalf("UpsertAccount() error = %v", err)
+	}
+
+	pending1 := makeVerdict("<pending-clear-1@example.com>")
+	pending2 := makeVerdict("<pending-clear-2@example.com>")
+	executed := makeVerdict("<executed-clear@example.com>")
+	executed.Status = "executed"
+
+	for _, v := range []db.Verdict{pending1, pending2, executed} {
+		if err := d.SaveVerdict(v); err != nil {
+			t.Fatalf("SaveVerdict() error = %v", err)
+		}
+	}
+
+	n, err := d.ClearVerdictsByStatus("pending")
+	if err != nil {
+		t.Fatalf("ClearVerdictsByStatus() error = %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 rows cleared, got %d", n)
+	}
+
+	if got, err := d.GetVerdictByMessageID("<pending-clear-1@example.com>"); err != nil {
+		t.Fatalf("GetVerdictByMessageID() error = %v", err)
+	} else if got != nil {
+		t.Errorf("expected pending verdict to be cleared, got %+v", got)
+	}
+
+	got, err := d.GetVerdictByMessageID("<executed-clear@example.com>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected executed verdict to survive, got nil")
+	}
+	if got.Status != "executed" {
+		t.Errorf("expected executed verdict status to remain %q, got %q", "executed", got.Status)
+	}
+}

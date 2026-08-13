@@ -299,3 +299,31 @@ func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
 		"verdictsCleared": cleared,
 	})
 }
+
+// handleRefresh clears pending verdicts and the LLM cache, then triggers a
+// normal scan. Unlike /api/rescan, executed verdicts are left in place, so
+// ScanAccount's existing-verdict skip still holds for messages already
+// acted on -- this is the cheap "re-run the pending queue against current
+// rules with fresh LLM answers" path, not a full re-evaluation of every
+// message in the mailbox.
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	cleared, err := s.db.ClearVerdictsByStatus("pending")
+	if err != nil {
+		jsonError(w, "failed to clear pending verdicts", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.db.ClearLLMCache(); err != nil {
+		jsonError(w, "failed to clear LLM cache", http.StatusInternalServerError)
+		return
+	}
+
+	if s.OnRefreshRequested != nil {
+		go s.OnRefreshRequested()
+	}
+
+	jsonResponse(w, map[string]any{
+		"status":          "refresh started",
+		"verdictsCleared": cleared,
+	})
+}

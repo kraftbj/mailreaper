@@ -80,6 +80,10 @@ func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) err
 				log.Printf("sweep deferred: update verdict %q: %v", v.MessageIDHeader, err)
 			}
 
+			if err := s.db.RecordPlacement(v.MessageIDHeader, expiredFolder); err != nil {
+				log.Printf("sweep deferred: record placement for %q: %v", v.MessageIDHeader, err)
+			}
+
 			if err := s.db.LogActivity(db.ActivityEntry{
 				Type:            "expired",
 				AccountID:       accountID,

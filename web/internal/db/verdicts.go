@@ -126,6 +126,20 @@ func (d *DB) ClearAllVerdicts() (int64, error) {
 	return result.RowsAffected()
 }
 
+// ClearVerdictsByStatus deletes verdicts in the given status and returns the
+// number removed.
+func (d *DB) ClearVerdictsByStatus(status string) (int64, error) {
+	res, err := d.Exec(`DELETE FROM verdicts WHERE status = ?`, status)
+	if err != nil {
+		return 0, fmt.Errorf("db: clear verdicts by status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("db: clear verdicts by status: rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // GetDeferredExpiries returns verdicts that have an expires_at in the past but
 // haven't been moved to the expired folder yet. These are messages that were
 // classified with a future expiry date that has now arrived.

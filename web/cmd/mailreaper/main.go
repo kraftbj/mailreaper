@@ -118,6 +118,9 @@ func main() {
 		runFullScan(ctx, scan, cfg)
 		scan.LookbackDays = prev
 	}
+	srv.OnRefreshRequested = func() {
+		runFullScan(ctx, scan, cfg)
+	}
 	log.Printf("starting web server on %s:%d", cfg.Server.BindAddr, cfg.Server.Port)
 	if err := srv.Start(ctx); err != nil {
 		log.Printf("web server error: %v", err)

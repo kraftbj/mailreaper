@@ -185,6 +185,10 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 					continue
 				}
 
+				if err := s.db.RecordPlacement(msg.MessageID, dest); err != nil {
+					log.Printf("scanner: record placement for %q: %v", msg.MessageID, err)
+				}
+
 				activityType := "triaged"
 				if verdict.Expired {
 					activityType = "expired"
@@ -264,6 +268,10 @@ func (s *Scanner) retryFailedMove(client MailClient, accountID string, msg *imap
 	if err := s.db.SaveVerdict(v); err != nil {
 		log.Printf("scanner: save recovered verdict for %q: %v", msg.MessageID, err)
 		return
+	}
+
+	if err := s.db.RecordPlacement(msg.MessageID, dest); err != nil {
+		log.Printf("scanner: record placement for %q: %v", msg.MessageID, err)
 	}
 
 	activityType := "triaged"
