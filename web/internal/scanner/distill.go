@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -158,13 +160,21 @@ func buildAutoRule(email string) (ruleID, senderPattern, name string) {
 	return
 }
 
-// sanitizeID converts a string into a safe rule ID component.
+// sanitizeID converts a string into a safe rule ID component. Replacing
+// "@", ".", and " " with "-" is lossy: distinct inputs whose separators
+// differ only in kind -- e.g. "john.doe@example.com" and
+// "john-doe@example.com" -- would otherwise sanitize to the identical
+// string and collide as rule IDs. A short deterministic hash of the
+// untransformed input is appended so distinct inputs always produce
+// distinct IDs, while the readable prefix is kept for display in logs.
 func sanitizeID(s string) string {
-	s = strings.ToLower(s)
-	s = strings.ReplaceAll(s, "@", "-")
-	s = strings.ReplaceAll(s, ".", "-")
-	s = strings.ReplaceAll(s, " ", "-")
-	return s
+	lower := strings.ToLower(s)
+	clean := strings.ReplaceAll(lower, "@", "-")
+	clean = strings.ReplaceAll(clean, ".", "-")
+	clean = strings.ReplaceAll(clean, " ", "-")
+
+	sum := sha256.Sum256([]byte(lower))
+	return fmt.Sprintf("%s-%s", clean, hex.EncodeToString(sum[:])[:8])
 }
 
 // senderMatchesExistingRule checks if the given sender email would match any
