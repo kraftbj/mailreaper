@@ -58,6 +58,17 @@ func (s *Scanner) DetectFeedback(client MailClient, accountID string, inboxFolde
 			}); err != nil {
 				log.Printf("scanner: add training example for %q: %v", msgID, err)
 			}
+
+			// The user just reversed this exact move, revoking MailReaper's
+			// claim on v.DestinationFolder for this message. Delete the
+			// placement so a later genuine manual filing into that same
+			// folder is detected again instead of being silently swallowed
+			// by DetectManualClassifications' HasPlacement check.
+			if v.DestinationFolder != "" {
+				if err := s.db.DeletePlacement(msgID, v.DestinationFolder); err != nil {
+					log.Printf("scanner: delete placement for %q: %v", msgID, err)
+				}
+			}
 		}
 
 		// Invalidate the LLM cache so it will be re-evaluated next scan.

@@ -41,3 +41,19 @@ func (d *DB) HasPlacement(messageIDHeader, folder string) (bool, error) {
 	}
 	return true, nil
 }
+
+// DeletePlacement removes the durable record that MailReaper moved the
+// message identified by messageIDHeader into folder. Called by
+// Scanner.DetectFeedback when the user reverses that exact move (the
+// message reappears in the inbox and its verdict flips to "corrected"):
+// the user has revoked MailReaper's claim on that destination for that
+// message, so a later genuine manual filing into the same folder must be
+// visible to DetectManualClassifications again, not silently swallowed by
+// a placement recorded before the correction.
+func (d *DB) DeletePlacement(messageIDHeader, folder string) error {
+	_, err := d.Exec(`DELETE FROM placements WHERE message_id_header = ? AND folder = ?`, messageIDHeader, folder)
+	if err != nil {
+		return fmt.Errorf("db: delete placement: %w", err)
+	}
+	return nil
+}

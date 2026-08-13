@@ -389,33 +389,82 @@ func (d *DB) migrateLLMCacheCompositeKey() error {
 	return nil
 }
 
-// migratePlacements is a safety net, not the primary path: fresh databases
-// and any database that has already run migrate() once get the placements
-// table from the base CREATE TABLE block above, which runs before
-// applyOneShotMigrations. This probes sqlite_master and only creates the
-// table if it is somehow still missing, then records v5_placements in
-// schema_meta either way so the migration ledger reflects when this
-// feature shipped.
+// migratePlacements has two jobs, both one-time:
+//
+//  1. Create the placements table if it is somehow still missing. This is a
+//     safety net, not the primary path: fresh databases and any database
+//     that has already run migrate() once get the table from the base
+//     CREATE TABLE block above, which runs before applyOneShotMigrations.
+//     Probes sqlite_master rather than creating unconditionally.
+//
+//  2. Backfill placements for verdicts this database already recorded as
+//     "executed" before this feature existed. Without this, the first
+//     POST /api/rescan after deploy (ClearAllVerdicts) reproduces the exact
+//     laundering bug this feature exists to fix, at the full scale of
+//     every message MailReaper had already moved: each surfaces with no
+//     verdict and no placement, DetectManualClassifications reads that as
+//     a user filing, and DistillRules promotes it into a permanent rule.
+//
+// The backfill deliberately includes only status = 'executed' rows:
+//
+//   - 'corrected' rows are excluded on purpose, not as a side effect of the
+//     status filter happening to match. UpdateVerdictStatus (verdicts.go)
+//     flips status to "corrected" when the user drags a message back out
+//     of wherever MailReaper put it, but it does NOT clear
+//     destination_folder -- that column still names the folder the user
+//     just reversed. Backfilling a placement from a corrected row would
+//     permanently encode "MailReaper owns this destination" for exactly
+//     the placements the user overrode, seeding the DetectFeedback gap
+//     (a stale placement suppressing a later genuine filing) retroactively
+//     across this database's entire history, on day one.
+//   - 'move_failed' rows are excluded for the same reason R3 excludes them
+//     in DetectManualClassifications: the verdict records an attempt whose
+//     outcome is ambiguous (the IMAP MOVE may have silently succeeded
+//     before the error was returned), not a confirmed placement.
+//   - destination_folder IS NULL, empty, or literally "INBOX" is excluded
+//     defensively. Current code paths that set status = 'executed' should
+//     never leave one of those, but this migration runs once against
+//     whatever is actually in a live database, not just the shapes today's
+//     code produces.
+//
+// placed_at falls back to evaluated_at when acted_at is NULL: placements.
+// placed_at is NOT NULL, so an executed row with a somehow-missing acted_at
+// must not be allowed to violate that constraint and abort the whole
+// backfill.
 func (d *DB) migratePlacements() error {
 	var name string
 	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'placements'`).Scan(&name)
-	if err == nil {
-		return nil // already exists
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	switch {
+	case err == nil:
+		// already exists — the common case, since the base schema's CREATE
+		// TABLE IF NOT EXISTS runs before this migration does.
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err := d.Exec(`
+			CREATE TABLE placements (
+				message_id_header TEXT NOT NULL,
+				folder            TEXT NOT NULL,
+				placed_at         TIMESTAMP NOT NULL,
+				PRIMARY KEY (message_id_header, folder)
+			)
+		`); err != nil {
+			return fmt.Errorf("create placements table: %w", err)
+		}
+	default:
 		return fmt.Errorf("probe placements table: %w", err)
 	}
 
 	_, err = d.Exec(`
-		CREATE TABLE placements (
-			message_id_header TEXT NOT NULL,
-			folder            TEXT NOT NULL,
-			placed_at         TIMESTAMP NOT NULL,
-			PRIMARY KEY (message_id_header, folder)
-		)
+		INSERT INTO placements (message_id_header, folder, placed_at)
+		SELECT message_id_header, destination_folder, COALESCE(acted_at, evaluated_at)
+		FROM verdicts
+		WHERE status = 'executed'
+		  AND destination_folder IS NOT NULL
+		  AND destination_folder != ''
+		  AND UPPER(destination_folder) != 'INBOX'
+		ON CONFLICT(message_id_header, folder) DO NOTHING
 	`)
 	if err != nil {
-		return fmt.Errorf("create placements table: %w", err)
+		return fmt.Errorf("backfill placements from executed verdicts: %w", err)
 	}
 	return nil
 }
