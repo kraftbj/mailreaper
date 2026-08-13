@@ -905,3 +905,174 @@ func TestMultiClassifyCachesErrorForBackoff(t *testing.T) {
 		t.Errorf("LLM server called %d times across two scans, want 1 -- the cached error should have backed off the second call", got)
 	}
 }
+
+// TestScanConfidenceGateRejectsBelowThreshold proves the ScanAccount
+// auto-execute gate (verdict.Confidence >= 0.7) actually rejects a
+// below-threshold verdict, not the confidence guard buried inside
+// extractValidExpiresAt. The "llm" rule type can't isolate this: its
+// deadline confidence check (minExpiryConfidence, scanner.go) already
+// discards anything under 0.7 before evaluateMessage ever returns, so a
+// low-confidence cached deadline verdict produces a nil overall verdict and
+// no row is saved at all -- not the "pending" outcome this gate is
+// responsible for. buildClassifyVerdict (the "llm-classify" path) only
+// rejects Confidence <= 0, so a 0.5-confidence classified verdict reaches
+// ScanAccount's own gate intact, which is what actually exercises it.
+//
+// Provider is "gemini" (per the brief) with a cached verdict pre-seeded
+// under the exact key llmCacheKey builds, so evaluateMultiClassify hits the
+// cache and no real network call to Gemini happens.
+func TestScanConfidenceGateRejectsBelowThreshold(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "gemini",
+		Gemini:   config.GeminiConfig{Model: "test-model"},
+	}
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotion",
+		Name:       "Promotion",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-promo",
+		Name:              "Promotions",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "llm-classify", Category: "promotion"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<gate-below@test>",
+		Subject:   "Maybe a sale",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-2 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	// Matches the key evaluateMultiClassify builds via
+	// Scanner.llmCacheKey("classify") for provider "gemini" / model
+	// "test-model".
+	const classifyCacheKey = "gemini:test-model|classify"
+	if err := database.SetCachedVerdict(msg.MessageID, classifyCacheKey, db.CachedVerdict{
+		Classified: true,
+		Category:   "promotion",
+		Reason:     "hedge: might be promotional",
+		Confidence: 0.5,
+	}); err != nil {
+		t.Fatalf("seed cached verdict: %v", err)
+	}
+
+	client := &mockMailClient{messages: []imappkg.FetchedMessage{msg}}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("moved %d message(s) at confidence 0.5, want 0 -- below the 0.7 auto-execute threshold", len(client.movedMsgs))
+	}
+
+	v, err := database.GetVerdictByMessageID(msg.MessageID)
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a saved verdict, got nil")
+	}
+	if v.Status != "pending" {
+		t.Errorf("Status = %q, want pending", v.Status)
+	}
+	if v.ActedAt != nil {
+		t.Error("ActedAt set despite the verdict being below the auto-execute threshold")
+	}
+}
+
+// TestScanConfidenceGateAcceptsAtBoundary pins confidence exactly 0.7 as
+// inclusive: the gate in ScanAccount reads "verdict.Confidence >= 0.7", so a
+// verdict at exactly the boundary must be auto-executed, not queued.
+func TestScanConfidenceGateAcceptsAtBoundary(t *testing.T) {
+	database := openTestDB(t)
+	cfg := testConfig()
+	cfg.LLM = config.LLMConfig{
+		Provider: "gemini",
+		Gemini:   config.GeminiConfig{Model: "test-model"},
+	}
+
+	if err := database.UpsertAccount("acct1", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := database.SaveCategory(db.Category{
+		ID:         "promotion",
+		Name:       "Promotion",
+		FolderName: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save category: %v", err)
+	}
+	if err := database.SaveRule(db.Rule{
+		ID:                "rule-promo",
+		Name:              "Promotions",
+		Enabled:           true,
+		Priority:          10,
+		ExpirationConfig:  db.ExpirationConfig{Type: "llm-classify", Category: "promotion"},
+		Action:            "move",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	msg := imappkg.FetchedMessage{
+		UID:       2,
+		MessageID: "<gate-boundary@test>",
+		Subject:   "Definitely a sale",
+		Sender:    "deals@example.com",
+		Date:      time.Now().Add(-2 * time.Hour),
+		Folder:    "INBOX",
+	}
+
+	const classifyCacheKey = "gemini:test-model|classify"
+	if err := database.SetCachedVerdict(msg.MessageID, classifyCacheKey, db.CachedVerdict{
+		Classified: true,
+		Category:   "promotion",
+		Reason:     "confident: looks like a sale",
+		Confidence: 0.7,
+	}); err != nil {
+		t.Fatalf("seed cached verdict: %v", err)
+	}
+
+	client := &mockMailClient{messages: []imappkg.FetchedMessage{msg}}
+	s := New(database, cfg)
+
+	if err := s.ScanAccount(context.Background(), client, "acct1", []string{"INBOX"}); err != nil {
+		t.Fatalf("ScanAccount: %v", err)
+	}
+
+	if len(client.movedMsgs) != 1 || client.movedMsgs[0] != "Folders/AI-Triage/Promotions" {
+		t.Fatalf("movedMsgs = %v, want a single move to Folders/AI-Triage/Promotions at confidence 0.7", client.movedMsgs)
+	}
+
+	v, err := database.GetVerdictByMessageID(msg.MessageID)
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a saved verdict, got nil")
+	}
+	if v.Status != "executed" {
+		t.Errorf("Status = %q, want executed at confidence 0.7 (inclusive boundary)", v.Status)
+	}
+	if v.ActedAt == nil {
+		t.Error("expected ActedAt to be set for an auto-executed verdict")
+	}
+}
