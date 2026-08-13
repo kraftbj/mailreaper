@@ -122,20 +122,32 @@ function renderReviewQueue(verdicts) {
     (verdicts.length > 5 ? `<div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;"><a href="/review.html">View all ${verdicts.length} →</a></div>` : "");
 }
 
-window.scanNow = async function() {
+let scanInFlight = false;
+let scanFallbackTimer = null;
+
+function setScanInFlight(active) {
+  scanInFlight = active;
   const btn = document.getElementById("scan-now-btn");
-  if (btn) { btn.disabled = true; btn.textContent = "Scanning..."; }
+  if (btn) {
+    btn.disabled = active;
+    btn.textContent = active ? "Scanning…" : "Scan Now";
+  }
+}
+
+window.scanNow = async function() {
+  if (scanInFlight) return;
+  setScanInFlight(true);
   try {
     await api("/api/scan", { method: "POST" });
-    // Wait a few seconds for scan to run, then refresh
-    setTimeout(async () => {
-      await loadDashboard();
-      if (btn) { btn.disabled = false; btn.textContent = "Scan Now"; }
-    }, 5000);
   } catch (err) {
     console.error("Scan failed:", err);
-    if (btn) { btn.disabled = false; btn.textContent = "Scan Now"; }
+    setScanInFlight(false);
+    return;
   }
+  // Safety net only: if scan_complete never arrives (server restart, SSE
+  // drop), release the button rather than wedging it forever.
+  clearTimeout(scanFallbackTimer);
+  scanFallbackTimer = setTimeout(() => setScanInFlight(false), 10 * 60 * 1000);
 };
 
 async function updateVerdict(msgId, status) {
@@ -171,6 +183,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   closeSSE = connectSSE(({ type }) => {
     if (type === "scan_complete") {
+      clearTimeout(scanFallbackTimer);
+      setScanInFlight(false);
       updateScanStatus("Last scan: just now");
       loadDashboard();
     }
