@@ -297,8 +297,23 @@ func (d *DB) applyOneShotMigrations() error {
 		back as "the user filed this" for a message MailReaper placed there
 		itself. Fresh databases already have the placements table from the
 		base schema (see the CREATE TABLE above), so migratePlacements
-		probes before creating anything. */
+		probes before creating anything. Table creation ONLY -- see
+		v6_placements_backfill below for why the historical backfill is a
+		separate migration key rather than living in this same function. */
 		{key: "v5_placements", fn: (*DB).migratePlacements},
+
+		/* 2026-08-12: backfills a placement for every verdict already
+		recorded as "executed" before the placements table existed. Kept as
+		its own key, deliberately not folded into v5_placements: an earlier
+		version of this migration ran the backfill under the v5_placements
+		key itself, which meant any database that had already recorded
+		v5_placements (from that earlier version, or from a checkout of the
+		intermediate commit that only created the table) would silently
+		skip the backfill forever -- applyOneShotMigrations never re-runs a
+		key once schema_meta has it. A distinct key guarantees this runs
+		regardless of what v5_placements recorded. See
+		migratePlacementsBackfill for the exclusions that matter. */
+		{key: "v6_placements_backfill", fn: (*DB).migratePlacementsBackfill},
 	}
 
 	for _, m := range migrations {
@@ -389,23 +404,65 @@ func (d *DB) migrateLLMCacheCompositeKey() error {
 	return nil
 }
 
-// migratePlacements has two jobs, both one-time:
+// migratePlacements creates the placements table if it is somehow still
+// missing. This is a safety net, not the primary path: fresh databases and
+// any database that has already run migrate() once get the table from the
+// base CREATE TABLE block above, which runs before applyOneShotMigrations.
+// Probes sqlite_master rather than creating unconditionally.
 //
-//  1. Create the placements table if it is somehow still missing. This is a
-//     safety net, not the primary path: fresh databases and any database
-//     that has already run migrate() once get the table from the base
-//     CREATE TABLE block above, which runs before applyOneShotMigrations.
-//     Probes sqlite_master rather than creating unconditionally.
+// This migration does ONLY table creation, deliberately. An earlier version
+// of this migration also ran the historical backfill (see
+// migratePlacementsBackfill below) under this same "v5_placements" key, but
+// that meant anyone who had already run that earlier version had
+// "v5_placements" recorded in schema_meta, and applyOneShotMigrations skips
+// any migration whose key is already recorded -- so upgrading to a version
+// that added the backfill under the same key would silently skip it
+// forever. The backfill now runs under its own "v6_placements_backfill"
+// key so it always runs regardless of what "v5_placements" recorded.
+func (d *DB) migratePlacements() error {
+	var name string
+	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'placements'`).Scan(&name)
+	switch {
+	case err == nil:
+		// already exists — the common case, since the base schema's CREATE
+		// TABLE IF NOT EXISTS runs before this migration does.
+		return nil
+	case errors.Is(err, sql.ErrNoRows):
+		// fall through to create it below
+	default:
+		return fmt.Errorf("probe placements table: %w", err)
+	}
+
+	if _, err := d.Exec(`
+		CREATE TABLE placements (
+			message_id_header TEXT NOT NULL,
+			folder            TEXT NOT NULL,
+			placed_at         TIMESTAMP NOT NULL,
+			PRIMARY KEY (message_id_header, folder)
+		)
+	`); err != nil {
+		return fmt.Errorf("create placements table: %w", err)
+	}
+	return nil
+}
+
+// migratePlacementsBackfill seeds a placement for every verdict this
+// database already recorded as "executed" before the placements feature
+// existed. Without this, the first POST /api/rescan after deploy
+// (ClearAllVerdicts) reproduces the exact laundering bug this feature
+// exists to fix, at the full scale of every message MailReaper had already
+// moved: each surfaces with no verdict and no placement,
+// DetectManualClassifications reads that as a user filing, and
+// DistillRules promotes it into a permanent rule.
 //
-//  2. Backfill placements for verdicts this database already recorded as
-//     "executed" before this feature existed. Without this, the first
-//     POST /api/rescan after deploy (ClearAllVerdicts) reproduces the exact
-//     laundering bug this feature exists to fix, at the full scale of
-//     every message MailReaper had already moved: each surfaces with no
-//     verdict and no placement, DetectManualClassifications reads that as
-//     a user filing, and DistillRules promotes it into a permanent rule.
+// Deliberately kept as its own migration key ("v6_placements_backfill"),
+// separate from "v5_placements" (table creation): schema_meta gates each
+// key independently, so giving the backfill its own key guarantees it runs
+// on any database that already recorded "v5_placements" from a version of
+// this migration that predates the backfill existing.
 //
-// The backfill deliberately includes only status = 'executed' rows:
+// The backfill deliberately includes only status = 'executed' rows, and
+// excludes three cases that are not proof of a MailReaper-owned placement:
 //
 //   - 'corrected' rows are excluded on purpose, not as a side effect of the
 //     status filter happening to match. UpdateVerdictStatus (verdicts.go)
@@ -421,6 +478,23 @@ func (d *DB) migrateLLMCacheCompositeKey() error {
 //     in DetectManualClassifications: the verdict records an attempt whose
 //     outcome is ambiguous (the IMAP MOVE may have silently succeeded
 //     before the error was returned), not a confirmed placement.
+//   - Rows with a "manual_classify" activity_log entry for the same message
+//     are excluded even though their current verdict status is 'executed'.
+//     DetectManualClassifications originally records such a message with
+//     verdict status "manual", not "executed" -- but SaveVerdict upserts
+//     by message_id_header, and a later BackfillFolders pass over the same
+//     folder can re-evaluate that message, match a rule that agrees with
+//     its current folder (the "Kept" branch), and overwrite that same row
+//     with status "executed", even though BackfillFolders never moved it
+//     and the user is who put it there. The activity_log row survives that
+//     overwrite (it is append-only), so it is the only remaining signal
+//     that this "executed" verdict actually names a user filing.
+//     Backfilling a placement for it would encode "MailReaper owns this
+//     destination" onto a message the user classified by hand, permanently
+//     suppressing future manual-classification detection for exactly the
+//     messages where that signal matters most. This is semantically
+//     correct, not merely harm reduction: a message the user manually
+//     classified must never carry a MailReaper placement.
 //   - destination_folder IS NULL, empty, or literally "INBOX" is excluded
 //     defensively. Current code paths that set status = 'executed' should
 //     never leave one of those, but this migration runs once against
@@ -431,36 +505,20 @@ func (d *DB) migrateLLMCacheCompositeKey() error {
 // placed_at is NOT NULL, so an executed row with a somehow-missing acted_at
 // must not be allowed to violate that constraint and abort the whole
 // backfill.
-func (d *DB) migratePlacements() error {
-	var name string
-	err := d.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'placements'`).Scan(&name)
-	switch {
-	case err == nil:
-		// already exists — the common case, since the base schema's CREATE
-		// TABLE IF NOT EXISTS runs before this migration does.
-	case errors.Is(err, sql.ErrNoRows):
-		if _, err := d.Exec(`
-			CREATE TABLE placements (
-				message_id_header TEXT NOT NULL,
-				folder            TEXT NOT NULL,
-				placed_at         TIMESTAMP NOT NULL,
-				PRIMARY KEY (message_id_header, folder)
-			)
-		`); err != nil {
-			return fmt.Errorf("create placements table: %w", err)
-		}
-	default:
-		return fmt.Errorf("probe placements table: %w", err)
-	}
-
-	_, err = d.Exec(`
+func (d *DB) migratePlacementsBackfill() error {
+	_, err := d.Exec(`
 		INSERT INTO placements (message_id_header, folder, placed_at)
-		SELECT message_id_header, destination_folder, COALESCE(acted_at, evaluated_at)
-		FROM verdicts
-		WHERE status = 'executed'
-		  AND destination_folder IS NOT NULL
-		  AND destination_folder != ''
-		  AND UPPER(destination_folder) != 'INBOX'
+		SELECT v.message_id_header, v.destination_folder, COALESCE(v.acted_at, v.evaluated_at)
+		FROM verdicts v
+		WHERE v.status = 'executed'
+		  AND v.destination_folder IS NOT NULL
+		  AND v.destination_folder != ''
+		  AND UPPER(v.destination_folder) != 'INBOX'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM activity_log a
+		      WHERE a.message_id_header = v.message_id_header
+		        AND a.type = 'manual_classify'
+		  )
 		ON CONFLICT(message_id_header, folder) DO NOTHING
 	`)
 	if err != nil {

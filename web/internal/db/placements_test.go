@@ -147,10 +147,11 @@ func TestPlacementsMigrationSafeOnFreshDB(t *testing.T) {
 	}
 }
 
-// TestPlacementsMigrationBackfillsExecutedOnly proves migratePlacements'
-// one-time backfill seeds a placement for every historical "executed"
-// verdict, while "corrected" and "move_failed" rows of the same shape
-// produce nothing:
+// TestPlacementsMigrationBackfillsExecutedOnly proves migratePlacementsBackfill
+// (the "v6_placements_backfill" migration) seeds a placement for every
+// historical "executed" verdict, while "corrected", "move_failed", and
+// "executed" rows carrying a "manual_classify" activity_log entry produce
+// nothing:
 //
 //   - "corrected" is excluded because UpdateVerdictStatus never clears
 //     destination_folder when it flips a verdict's status -- that column
@@ -160,6 +161,15 @@ func TestPlacementsMigrationSafeOnFreshDB(t *testing.T) {
 //   - "move_failed" is excluded because the move outcome is ambiguous (the
 //     IMAP MOVE may have silently succeeded before the error came back),
 //     matching R3's treatment of move_failed in DetectManualClassifications.
+//   - An "executed" verdict with a "manual_classify" activity_log entry for
+//     the same message is excluded even though its current status is
+//     "executed": that combination means the row started life as a
+//     DetectManualClassifications-recorded user filing (status "manual")
+//     and was later overwritten to "executed" by a subsequent
+//     BackfillFolders pass whose re-evaluation happened to agree with the
+//     folder the user already put it in (the "Kept" branch). The
+//     activity_log entry survives that overwrite and is the only remaining
+//     signal that MailReaper never actually moved this message.
 //
 // It also proves the COALESCE(acted_at, evaluated_at) fallback: an executed
 // row with a NULL acted_at must still produce a placement, not violate
@@ -210,14 +220,36 @@ func TestPlacementsMigrationBackfillsExecutedOnly(t *testing.T) {
 		t.Fatalf("save move_failed verdict: %v", err)
 	}
 
-	// Force applyOneShotMigrations to run migratePlacements again, now
-	// against a populated verdicts table -- the scenario the backfill
+	// A message the user manually classified, whose verdict row was later
+	// overwritten to "executed" by a BackfillFolders "Kept" re-evaluation.
+	// The activity_log entry is the only surviving signal that this was
+	// never MailReaper's own move.
+	manuallyClassified := makeVerdict("<backfill-manual-classify@example.com>")
+	manuallyClassified.Status = "executed"
+	manuallyClassified.DestinationFolder = "Receipts"
+	manuallyClassified.ActedAt = &now
+	if err := first.SaveVerdict(manuallyClassified); err != nil {
+		t.Fatalf("save manually-classified-then-overwritten verdict: %v", err)
+	}
+	if err := first.LogActivity(db.ActivityEntry{
+		Type:            "manual_classify",
+		AccountID:       "account-1",
+		MessageIDHeader: "<backfill-manual-classify@example.com>",
+		Subject:         manuallyClassified.Subject,
+		Sender:          manuallyClassified.Sender,
+		Destination:     "Receipts",
+	}); err != nil {
+		t.Fatalf("log manual_classify activity: %v", err)
+	}
+
+	// Force applyOneShotMigrations to run migratePlacementsBackfill again,
+	// now against a populated verdicts table -- the scenario the backfill
 	// exists for. The initial Open ran the backfill against an empty
 	// verdicts table, so it inserted nothing; deleting the schema_meta
 	// marker and reopening is the only way to make it run again without
 	// also reverting the placements table.
-	if _, err := first.Exec(`DELETE FROM schema_meta WHERE key = ?`, "v5_placements"); err != nil {
-		t.Fatalf("clear v5 schema_meta marker: %v", err)
+	if _, err := first.Exec(`DELETE FROM schema_meta WHERE key = ?`, "v6_placements_backfill"); err != nil {
+		t.Fatalf("clear v6 schema_meta marker: %v", err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first handle: %v", err)
@@ -259,5 +291,78 @@ func TestPlacementsMigrationBackfillsExecutedOnly(t *testing.T) {
 	}
 	if has {
 		t.Error("move_failed verdict must not seed a placement -- the move outcome is ambiguous")
+	}
+
+	has, err = second.HasPlacement("<backfill-manual-classify@example.com>", "Receipts")
+	if err != nil {
+		t.Fatalf("HasPlacement(manual_classify): %v", err)
+	}
+	if has {
+		t.Error("an executed verdict with a manual_classify activity entry must not seed a placement -- the user filed this message by hand")
+	}
+}
+
+// TestPlacementsBackfillRunsEvenWhenV5AlreadyRecorded is the review Finding
+// 1 regression test: an earlier version of migratePlacements ran the
+// historical backfill under the "v5_placements" key itself. Anyone who had
+// already run that version -- or the intermediate commit that only created
+// the table under that key -- has "v5_placements" recorded in schema_meta,
+// and applyOneShotMigrations never re-runs a key it has already recorded.
+// This proves the backfill still runs, because it now lives under its own
+// "v6_placements_backfill" key: a database that already has "v5_placements"
+// recorded, but has never seen "v6_placements_backfill", gets the backfill
+// on its next Open.
+func TestPlacementsBackfillRunsEvenWhenV5AlreadyRecorded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "upgrade-from-v5.db")
+
+	first, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	if err := first.UpsertAccount("account-1", "Test Account"); err != nil {
+		t.Fatalf("UpsertAccount() error = %v", err)
+	}
+
+	// Seed an executed verdict after the first Open already ran the
+	// backfill once (against an empty verdicts table, so it inserted
+	// nothing).
+	now := time.Now().UTC()
+	executed := makeVerdict("<upgrade-executed@example.com>")
+	executed.Status = "executed"
+	executed.DestinationFolder = "Expired"
+	executed.ActedAt = &now
+	if err := first.SaveVerdict(executed); err != nil {
+		t.Fatalf("save executed verdict: %v", err)
+	}
+
+	// Simulate a database that already has "v5_placements" recorded (from
+	// an earlier version of this migration, or the intermediate commit)
+	// but has never seen "v6_placements_backfill". Leaving "v5_placements"
+	// in place is the point of this test -- deleting it would exercise a
+	// different, already-covered path.
+	if _, err := first.Exec(`DELETE FROM schema_meta WHERE key = ?`, "v6_placements_backfill"); err != nil {
+		t.Fatalf("clear v6 schema_meta marker: %v", err)
+	}
+	var v5Recorded string
+	if err := first.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, "v5_placements").Scan(&v5Recorded); err != nil {
+		t.Fatalf("expected v5_placements to still be recorded: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first handle: %v", err)
+	}
+
+	second, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("second Open() error = %v", err)
+	}
+	defer second.Close()
+
+	has, err := second.HasPlacement("<upgrade-executed@example.com>", "Expired")
+	if err != nil {
+		t.Fatalf("HasPlacement(): %v", err)
+	}
+	if !has {
+		t.Error("v6_placements_backfill did not run on a database that already had v5_placements recorded")
 	}
 }
