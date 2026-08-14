@@ -2242,6 +2242,14 @@ This plan was reviewed by OpenAI Codex (`/codex`, high reasoning, read-only) aga
 
 ## Deployment Note
 
+**Two things that will bite on first deploy, found by the final review:**
+
+**The Host allowlist will 403 you if you do not reach the dashboard at `localhost`, `127.0.0.1`, or `::1`.** The guard covers the static UI as well as the API, so a bookmark pointing at a LAN IP or a `.local` hostname returns a bare JSON 403 with nothing in the UI explaining why. Set `server.allowed_hosts` in `config.yaml` to include whatever hostname you actually use.
+
+**If you deploy via `docker-compose`, the dashboard will not answer until you change the bind address.** `docker-compose.yml` publishes `127.0.0.1:8025:8025` on the host, but `bind_addr` defaults to `127.0.0.1` *inside the container* — Docker forwards the published port to the container's external interface, which a container-side loopback bind never receives. Set `bind_addr: 0.0.0.0` in the container's config; the host-side `127.0.0.1:` publish is what keeps it off the LAN. This does not affect a native `./mailreaper` run.
+
+
+
 After Phase 4 lands, flush the LLM cache once so the last old-model entries cannot be replayed by a backfill run that predates Task 13:
 
 ```bash
