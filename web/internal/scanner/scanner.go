@@ -123,16 +123,16 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 			now := time.Now().UTC()
 
 			v := db.Verdict{
-				AccountID:       accountID,
-				MessageIDHeader: msg.MessageID,
-				Subject:         msg.Subject,
-				Sender:          msg.Sender,
-				SentAt:          msg.Date,
-				RuleID:          &ruleID,
+				AccountID:         accountID,
+				MessageIDHeader:   msg.MessageID,
+				Subject:           msg.Subject,
+				Sender:            msg.Sender,
+				SentAt:            msg.Date,
+				RuleID:            &ruleID,
 				DestinationFolder: verdict.Rule.DestinationFolder,
-				Reason:          verdict.Reason,
-				Confidence:      verdict.Confidence,
-				EvaluatedAt:     now,
+				Reason:            verdict.Reason,
+				Confidence:        verdict.Confidence,
+				EvaluatedAt:       now,
 			}
 
 			if verdict.ExpiresAt != nil {

@@ -24,9 +24,9 @@ type CachedVerdict struct {
 
 // ttl returns the cache duration for a given verdict.
 //
-//	- error verdicts: 10 minutes (retry sooner)
-//	- verdicts that took action (classified or extracted a deadline): 24 hours
-//	- verdicts that found nothing actionable: 7 days
+//   - error verdicts: 10 minutes (retry sooner)
+//   - verdicts that took action (classified or extracted a deadline): 24 hours
+//   - verdicts that found nothing actionable: 7 days
 func (cv *CachedVerdict) ttl() time.Duration {
 	if cv.Error != "" {
 		return 10 * time.Minute

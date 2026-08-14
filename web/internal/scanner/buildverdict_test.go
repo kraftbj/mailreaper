@@ -18,11 +18,11 @@ func TestExtractValidExpiresAt(t *testing.T) {
 	future := now.Add(24 * time.Hour).Format(time.RFC3339)
 
 	tests := []struct {
-		name        string
-		expiresAt   string
-		confidence  float64
-		wantValid   bool
-		wantPast    bool
+		name       string
+		expiresAt  string
+		confidence float64
+		wantValid  bool
+		wantPast   bool
 	}{
 		{"empty string", "", 0.9, false, false},
 		{"low confidence is rejected", past, 0.4, false, false},

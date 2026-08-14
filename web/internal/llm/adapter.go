@@ -112,10 +112,10 @@ func CallLLM(ctx context.Context, cfg *config.LLMConfig, systemPrompt, userConte
 // --- Gemini ---
 
 type geminiRequest struct {
-	SystemInstruction geminiContent    `json:"systemInstruction"`
-	Contents          []geminiContent  `json:"contents"`
-	GenerationConfig  geminiGenConfig  `json:"generationConfig"`
-	ServiceTier       string           `json:"service_tier,omitempty"`
+	SystemInstruction geminiContent   `json:"systemInstruction"`
+	Contents          []geminiContent `json:"contents"`
+	GenerationConfig  geminiGenConfig `json:"generationConfig"`
+	ServiceTier       string          `json:"service_tier,omitempty"`
 }
 
 type geminiContent struct {

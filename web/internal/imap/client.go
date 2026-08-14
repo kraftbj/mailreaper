@@ -362,4 +362,3 @@ func (c *Client) GetMessagesInFolder(folder string) ([]FetchedMessage, error) {
 func SanitizeFolderName(name string) string {
 	return strings.TrimSpace(name)
 }
-

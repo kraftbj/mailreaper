@@ -175,13 +175,13 @@ func headerValues(headers map[string][]string, name string) ([]string, bool) {
 // contentDateFormats lists formats tried when parsing a date captured by the
 // content regex, in preference order.
 var contentDateFormats = []string{
-	time.RFC3339,                // "2006-01-02T15:04:05Z07:00"
-	"2006-01-02T15:04:05Z",     // RFC3339 UTC shorthand
-	"2006-01-02",               // date only
-	"January 2, 2006",          // US long form
-	"Jan 2, 2006",              // US short form
-	"01/02/2006",               // US numeric
-	"02 Jan 2006",              // EU short
+	time.RFC3339,           // "2006-01-02T15:04:05Z07:00"
+	"2006-01-02T15:04:05Z", // RFC3339 UTC shorthand
+	"2006-01-02",           // date only
+	"January 2, 2006",      // US long form
+	"Jan 2, 2006",          // US short form
+	"01/02/2006",           // US numeric
+	"02 Jan 2006",          // EU short
 	time.RFC1123Z,
 	time.RFC1123,
 }
