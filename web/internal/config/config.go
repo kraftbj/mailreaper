@@ -57,6 +57,12 @@ type ScanConfig struct {
 type ServerConfig struct {
 	Port     int    `yaml:"port"`
 	BindAddr string `yaml:"bind_addr"`
+
+	// AllowedHosts, when non-empty, replaces the default loopback Host
+	// allowlist (localhost, 127.0.0.1, [::1], ::1) that guards against DNS
+	// rebinding. Set this to your reverse proxy's hostname(s) when BindAddr
+	// is not loopback; otherwise every request is rejected.
+	AllowedHosts []string `yaml:"allowed_hosts"`
 }
 
 // Config is the top-level configuration structure.

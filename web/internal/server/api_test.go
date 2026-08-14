@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,8 +30,18 @@ func openTestDB(t *testing.T) *db.DB {
 func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 	t.Helper()
 	d := openTestDB(t)
-	s := server.NewServer(d, "127.0.0.1", 0)
+	s := server.NewServer(d, "127.0.0.1", 0, nil)
 	return s, d
+}
+
+// newRequest builds a test request with Host set to "127.0.0.1" -- an
+// httptest.NewRequest with a path-only target defaults Host to
+// "example.com", which withAllowedHosts' default loopback allowlist would
+// reject.
+func newRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "127.0.0.1"
+	return req
 }
 
 func TestGetRules(t *testing.T) {
@@ -51,7 +62,7 @@ func TestGetRules(t *testing.T) {
 		t.Fatalf("SaveRule: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req := newRequest(http.MethodGet, "/api/rules", nil)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -74,7 +85,7 @@ func TestGetRules(t *testing.T) {
 func TestGetRulesEmptyArray(t *testing.T) {
 	s, _ := newTestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req := newRequest(http.MethodGet, "/api/rules", nil)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -111,7 +122,7 @@ func TestGetActivity(t *testing.T) {
 		t.Fatalf("LogActivity: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/activity", nil)
+	req := newRequest(http.MethodGet, "/api/activity", nil)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -151,7 +162,7 @@ func TestGetPendingVerdicts(t *testing.T) {
 		t.Fatalf("SaveVerdict: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/verdicts/pending", nil)
+	req := newRequest(http.MethodGet, "/api/verdicts/pending", nil)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -192,7 +203,7 @@ func TestUpdateVerdictStatus(t *testing.T) {
 	}
 
 	body := bytes.NewBufferString(`{"status":"approved"}`)
-	req := httptest.NewRequest(http.MethodPut, "/api/verdicts/%3Cupdate-me%40example.com%3E/status", body)
+	req := newRequest(http.MethodPut, "/api/verdicts/%3Cupdate-me%40example.com%3E/status", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
@@ -228,7 +239,7 @@ func TestGetCategories(t *testing.T) {
 		t.Fatalf("SaveCategory: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/categories", nil)
+	req := newRequest(http.MethodGet, "/api/categories", nil)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 
@@ -301,7 +312,7 @@ func TestRescanClearsEverything(t *testing.T) {
 		t.Fatalf("SaveVerdict(pending): %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rescan", nil)
+	req := newRequest(http.MethodPost, "/api/rescan", nil)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
@@ -361,7 +372,7 @@ func TestRefreshPreservesExecutedVerdicts(t *testing.T) {
 		t.Fatalf("SaveVerdict(pending): %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/refresh", nil)
+	req := newRequest(http.MethodPost, "/api/refresh", nil)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
@@ -385,6 +396,38 @@ func TestRefreshPreservesExecutedVerdicts(t *testing.T) {
 		t.Fatalf("GetVerdictByMessageID(pending): %v", err)
 	} else if got != nil {
 		t.Errorf("expected pending verdict to be cleared, got %+v", got)
+	}
+}
+
+// TestDeleteRuleDoesNotDeclineWhenDeleteFails verifies handleDeleteRule does
+// not record an auto-generated rule as declined when the delete itself
+// fails. Before the fix, DeclineAutoRule ran first and unconditionally
+// succeeded, so a failed DeleteRule left the rule recorded as declined but
+// still enabled -- it kept filing mail while the UI reported a failure.
+func TestDeleteRuleDoesNotDeclineWhenDeleteFails(t *testing.T) {
+	s, d := newTestServer(t)
+
+	// Force DeleteRule to fail while leaving declined_auto_rules intact, so
+	// a decline recorded despite the failure is detectable.
+	if _, err := d.Exec(`DROP TABLE rules`); err != nil {
+		t.Fatalf("drop rules table: %v", err)
+	}
+
+	req := newRequest(http.MethodDelete, "/api/rules/auto-test", nil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when delete fails, got %d", rec.Code)
+	}
+
+	declined, err := d.GetDeclinedAutoRuleIDs()
+	if err != nil {
+		t.Fatalf("GetDeclinedAutoRuleIDs: %v", err)
+	}
+	if declined["auto-test"] {
+		t.Error("rule was recorded as declined even though the delete failed")
 	}
 }
 

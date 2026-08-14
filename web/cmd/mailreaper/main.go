@@ -108,7 +108,7 @@ func main() {
 	}()
 
 	// Start web server (blocks until context cancelled).
-	srv := server.NewServer(database, cfg.Server.BindAddr, cfg.Server.Port)
+	srv := server.NewServer(database, cfg.Server.BindAddr, cfg.Server.Port, cfg.Server.AllowedHosts)
 	srv.OnScanRequested = func() {
 		runFullScan(ctx, scan, cfg)
 	}

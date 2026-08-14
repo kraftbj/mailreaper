@@ -51,6 +51,13 @@ server:
   # authentication and can move mail. Only change this behind a reverse
   # proxy that adds auth.
   bind_addr: 127.0.0.1
+  # Hostnames the server accepts in the request Host header. Defaults to
+  # localhost / 127.0.0.1 / [::1] / ::1, which blocks DNS-rebinding attacks
+  # (an attacker page resolving to your loopback address). If you put this
+  # behind a reverse proxy with a real hostname, list it here -- setting
+  # bind_addr without setting allowed_hosts rejects every request.
+  # allowed_hosts:
+  #   - mail.example.internal
 
 # IANA timezone used to interpret LLM-extracted deadlines that carry no UTC
 # offset. Defaults to the host zone, which is UTC inside the container.

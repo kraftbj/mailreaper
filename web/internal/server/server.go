@@ -11,18 +11,22 @@ import (
 
 // Server holds the HTTP mux and its dependencies.
 type Server struct {
-	db                *db.DB
-	mux               *http.ServeMux
-	handler           http.Handler // mux wrapped with withSameOrigin; always serve this, never mux directly
-	bindAddr          string
-	port              int
+	db                 *db.DB
+	mux                *http.ServeMux
+	handler            http.Handler // mux wrapped with withSameOrigin; always serve this, never mux directly
+	bindAddr           string
+	port               int
 	OnScanRequested    func() // called when user clicks "Scan Now"
 	OnRescanRequested  func() // full rescan: no lookback limit, no message cap
 	OnRefreshRequested func() // cheap refresh: normal scan after clearing pending verdicts + LLM cache
 }
 
 // NewServer creates a Server and registers all routes on the mux.
-func NewServer(database *db.DB, bindAddr string, port int) *Server {
+//
+// allowedHosts, when non-empty, replaces the default loopback Host
+// allowlist (see withAllowedHosts) -- the escape hatch for anyone running
+// behind a reverse proxy with a real hostname.
+func NewServer(database *db.DB, bindAddr string, port int, allowedHosts []string) *Server {
 	s := &Server{
 		db:       database,
 		mux:      http.NewServeMux(),
@@ -30,7 +34,7 @@ func NewServer(database *db.DB, bindAddr string, port int) *Server {
 		port:     port,
 	}
 	s.registerRoutes()
-	s.handler = withSameOrigin(s.mux)
+	s.handler = withAllowedHosts(allowedHosts, withSameOrigin(s.mux))
 	return s
 }
 
