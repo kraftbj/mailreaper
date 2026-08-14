@@ -69,6 +69,13 @@ scan:
 
 server:
   port: 8025
+  bind_addr: 127.0.0.1  # loopback only by default; the dashboard has no auth
+  # allowed_hosts:      # only needed if bind_addr is not loopback (see below)
+  #   - mail.example.internal
+
+# IANA timezone for interpreting LLM-extracted deadlines that carry no UTC
+# offset (defaults to the host zone, which is UTC inside a container).
+timezone: America/Chicago
 ```
 
 ### LLM Providers
@@ -103,6 +110,7 @@ server:
 | GET | `/api/stats` | Dashboard statistics |
 | POST | `/api/scan` | Trigger a scan |
 | POST | `/api/rescan` | Clear all verdicts and full rescan |
+| POST | `/api/refresh` | Clear pending verdicts and LLM cache, then scan -- the cheap workaround for the LLM cache's message-ID-only key limitation, without the full data loss of `/api/rescan` |
 
 There is no authentication on this API. To close cross-origin CSRF exposure,
 non-GET requests must send `Content-Type: application/json` and, when the
@@ -112,6 +120,15 @@ or DELETEs without setting `Content-Type: application/json` will now get a
 403 -- add that header to any external client. This is a mitigation against
 browser-driven attacks, not authentication; anything that can reach
 `localhost:8025` directly can still call the API.
+
+Every request, including `GET`, is also checked against a Host allowlist
+(`localhost`, `127.0.0.1`, `[::1]`, `::1` by default) to close a DNS-rebinding
+gap the `Sec-Fetch-Site`/`Content-Type` checks above cannot: an attacker page
+served from a hostname that resolves to your loopback address can make the
+browser send a legitimate same-origin, JSON-typed request. Set
+`server.allowed_hosts` in `config.yaml` if you run this behind a reverse
+proxy with a real hostname -- otherwise every request is rejected once
+`bind_addr` is not loopback.
 
 ## How It Learns
 

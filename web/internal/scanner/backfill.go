@@ -129,6 +129,13 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 				confidence = verdict.Confidence
 			}
 
+			/* Safe to check this ahead of the confidence gate below only
+			because rescueFolder is never a category folder:
+			backfillDestination falls back to rescueFolder on a nil or
+			unmatched verdict, and if rescueFolder could equal a category
+			folder, a nil (zero-confidence) verdict for a message already
+			sitting in that folder would be recorded "Kept" here instead of
+			being caught by the <0.7 gate. */
 			if strings.EqualFold(dest, folder) {
 				stats.Kept++
 				saveBackfillVerdict(s.db, accountID, &msg, folder, verdict, "executed")

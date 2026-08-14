@@ -2249,3 +2249,17 @@ cd web && sqlite3 mailreaper.db "DELETE FROM llm_cache;"
 ```
 
 Do this with the server stopped. Do **not** use `POST /api/rescan` for this — before Task 16 lands it destroys executed-verdict history for messages already moved outside `folders.scan`, which cannot be rebuilt.
+
+### Whole-branch review follow-up (2026-08-14)
+
+**Stop the running server before deploying this branch.** The `v4_llm_cache_composite_key` migration (`v4` for short) drops and recreates `llm_cache`, a table a live scanner writes to; running the migration underneath an active scan cycle is unsafe.
+
+**The first scan after deploy will move mail that previous scans left untouched.** Task 4 fixed the built-in `Expires`-header rule, which is priority 1 (a catch-all ahead of every other rule) and had never actually matched anything before that fix. Once it starts matching, the first post-deploy scan reclassifies backlog messages that earlier scans silently passed over. This is expected, not a regression.
+
+**On the `auto-*` sender-pattern rules:** the review that produced this plan recommended a migration to disable pre-existing `auto-*` rules whose sender pattern is `*@domain` (a whole-domain match rather than an exact address), reasoning that `DistillRules` was only ever supposed to create exact-address rules. That migration was **not added**. The live database was audited directly and all 26 such rules are service or organization domains (`*@linkedin.com`, `*@slack.com`, `*@tripit.com`, `*@nd.edu`, parish domains) — zero consumer mail providers. Disabling them would break working triage to fix a problem this database does not have. If you maintain a fork or a different deployment, audit your own database before assuming this is safe to skip:
+
+```sql
+SELECT id, enabled, json_extract(match_config,'$.senderPatterns') FROM rules WHERE id LIKE 'auto-%';
+```
+
+Review each `*@domain` row by hand; disable individually only if it turns out to be a consumer provider (e.g. `*@gmail.com`) rather than a service or organization domain.

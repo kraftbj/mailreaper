@@ -136,8 +136,12 @@ func buildAutoRule(email string) (ruleID, senderPattern, name string) {
 				// Use the part before _at_ as a prefix pattern
 				origLocal := strings.ReplaceAll(parts[0], "_", ".")
 				name = origLocal + "@" + origDomain
-				// Match the SimpleLogin alias pattern (partial match on local part)
-				senderPattern = fmt.Sprintf("*%s*@simplelogin.co", strings.ReplaceAll(parts[0], "_", "_"))
+				/* Match the SimpleLogin alias pattern (partial match on local
+				part). parts[0] is used raw, not dot-converted like origLocal
+				above: the actual alias local part still contains
+				underscores, so the pattern must match against the raw form
+				to work. */
+				senderPattern = fmt.Sprintf("*%s*@simplelogin.co", parts[0])
 				ruleID = fmt.Sprintf("auto-sl-%s", sanitizeID(origDomain))
 				return
 			}

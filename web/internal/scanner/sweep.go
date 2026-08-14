@@ -46,20 +46,13 @@ func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) err
 			continue
 		}
 
-		// Find the message in its current folder and move it.
-		msgIDs, err := client.GetMessageIDsInFolder(v.DestinationFolder)
-		if err != nil {
-			log.Printf("sweep deferred: get messages in %q: %v", v.DestinationFolder, err)
-			continue
-		}
-
-		// Find UID for this message.
+		// Find the message in its current folder and move it. Needs the UID,
+		// so GetMessagesInFolder (not GetMessageIDsInFolder) is the right call.
 		msgs, err := client.GetMessagesInFolder(v.DestinationFolder)
 		if err != nil {
 			log.Printf("sweep deferred: get messages in %q: %v", v.DestinationFolder, err)
 			continue
 		}
-		_ = msgIDs // used msgs instead for UID
 
 		for _, msg := range msgs {
 			if msg.MessageID != v.MessageIDHeader {
@@ -109,4 +102,3 @@ func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) err
 
 	return nil
 }
-

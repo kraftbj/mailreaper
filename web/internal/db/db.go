@@ -505,6 +505,18 @@ func (d *DB) migratePlacements() error {
 // placed_at is NOT NULL, so an executed row with a somehow-missing acted_at
 // must not be allowed to violate that constraint and abort the whole
 // backfill.
+//
+// This migration cannot undo false placements written by an intermediate
+// development version that briefly ran this same backfill logic under the
+// "v5_placements" key (see the migratePlacements doc comment above): any
+// database that already has schema_meta rows for "v5_placements" and
+// "v6_placements_backfill" from that version's run will not re-run this
+// function at all, so a placement it wrote from a 'corrected' or
+// 'move_failed' row -- before this function's current exclusions existed --
+// stays in the table. Anyone who ran that intermediate version needs a
+// one-off manual cleanup against their placements table, not a new
+// migration key (this branch adds no new migrations; see plan Deployment
+// Note).
 func (d *DB) migratePlacementsBackfill() error {
 	_, err := d.Exec(`
 		INSERT INTO placements (message_id_header, folder, placed_at)
