@@ -137,10 +137,28 @@ func (d *DB) SaveRule(r Rule) error {
 }
 
 // DeleteRule removes a rule by ID.
+//
+// verdicts.rule_id references rules(id) with no ON DELETE clause, so it
+// defaults to NO ACTION -- and Open enables foreign-key enforcement in the
+// DSN. Deleting a rule that any verdict references would otherwise fail
+// with "FOREIGN KEY constraint failed". The verdict's own history (subject,
+// sender, status, destination) is still meaningful without the rule that
+// produced it, so clear the reference rather than blocking the delete.
 func (d *DB) DeleteRule(id string) error {
-	_, err := d.Exec(`DELETE FROM rules WHERE id = ?`, id)
+	tx, err := d.Begin()
 	if err != nil {
 		return fmt.Errorf("db: delete rule: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE verdicts SET rule_id = NULL WHERE rule_id = ?`, id); err != nil {
+		return fmt.Errorf("db: delete rule: clear verdict references: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM rules WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("db: delete rule: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: delete rule: commit: %w", err)
 	}
 	return nil
 }

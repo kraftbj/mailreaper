@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kraftbj/mailreaper/internal/db"
 )
@@ -149,6 +150,71 @@ func TestDeleteRule(t *testing.T) {
 	}
 	if got != nil {
 		t.Error("expected nil after delete")
+	}
+}
+
+// TestDeleteRuleWithReferencingVerdict is the Critical regression from the
+// whole-branch review: foreign_keys(1) was enabled in the DSN (Open) for the
+// first time, but verdicts.rule_id has no ON DELETE clause, so it defaults
+// to NO ACTION. Deleting a rule that any verdict references used to fail
+// with "FOREIGN KEY constraint failed" -- breaking the Delete button for any
+// rule that had ever matched a message. DeleteRule must clear the reference
+// instead of leaving it to the database default.
+func TestDeleteRuleWithReferencingVerdict(t *testing.T) {
+	d := openTestDB(t)
+
+	r := db.Rule{
+		ID:               "user-referenced",
+		Name:             "Referenced by a verdict",
+		Enabled:          true,
+		ExpirationConfig: db.ExpirationConfig{Type: "ttl", Hours: 24},
+	}
+	if err := d.SaveRule(r); err != nil {
+		t.Fatalf("SaveRule() error = %v", err)
+	}
+
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("UpsertAccount() error = %v", err)
+	}
+
+	ruleID := r.ID
+	now := time.Now().UTC()
+	v := db.Verdict{
+		AccountID:       "acct",
+		MessageIDHeader: "<referencing@example.com>",
+		Subject:         "Referencing verdict",
+		Sender:          "sender@example.com",
+		SentAt:          now,
+		RuleID:          &ruleID,
+		Status:          "executed",
+		EvaluatedAt:     now,
+		ActedAt:         &now,
+	}
+	if err := d.SaveVerdict(v); err != nil {
+		t.Fatalf("SaveVerdict() error = %v", err)
+	}
+
+	if err := d.DeleteRule(r.ID); err != nil {
+		t.Fatalf("DeleteRule() error = %v", err)
+	}
+
+	got, err := d.GetRule(r.ID)
+	if err != nil {
+		t.Fatalf("GetRule() after delete error = %v", err)
+	}
+	if got != nil {
+		t.Error("expected rule to be gone after delete")
+	}
+
+	gotVerdict, err := d.GetVerdictByMessageID(v.MessageIDHeader)
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID() error = %v", err)
+	}
+	if gotVerdict == nil {
+		t.Fatal("expected verdict to survive rule deletion")
+	}
+	if gotVerdict.RuleID != nil {
+		t.Errorf("expected verdict.RuleID to be nil after rule deletion, got %q", *gotVerdict.RuleID)
 	}
 }
 

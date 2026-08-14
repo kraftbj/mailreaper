@@ -56,8 +56,17 @@ func (s *Server) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteRule removes a rule by its path parameter ID. If the rule was
 // auto-generated, it records the deletion so the rule won't be re-proposed.
+//
+// Delete runs before DeclineAutoRule so a failed delete can never leave a
+// rule recorded as declined while it stays enabled and keeps filing mail --
+// the decline record is only meaningful once the rule is actually gone.
 func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	if err := s.db.DeleteRule(id); err != nil {
+		jsonError(w, "failed to delete rule", http.StatusInternalServerError)
+		return
+	}
 
 	if strings.HasPrefix(id, "auto-") {
 		if err := s.db.DeclineAutoRule(id); err != nil {
@@ -66,10 +75,6 @@ func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.db.DeleteRule(id); err != nil {
-		jsonError(w, "failed to delete rule", http.StatusInternalServerError)
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
