@@ -113,6 +113,16 @@ func (s *Scanner) DetectManualClassifications(client MailClient, accountID strin
 		if cat.FolderName == "" {
 			continue
 		}
+		/* The Expired folder is this pipeline's own terminal state, not a
+		user classification. v3_seed_expired_category (db.go) created a
+		category with ID "expired", so without this guard a message sitting
+		there with no verdict and no placement (e.g. moved by a version
+		predating the placements feature) gets read as a manual filing, and
+		DistillRules can promote three from one sender into a permanent rule
+		that expires that sender's mail wholesale. */
+		if cat.ID == "expired" {
+			continue
+		}
 
 		msgs, err := client.GetMessagesInFolder(cat.FolderName)
 		if err != nil {

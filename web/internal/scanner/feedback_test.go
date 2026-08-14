@@ -62,6 +62,68 @@ func TestRescanDoesNotLaunderOwnMoves(t *testing.T) {
 	}
 }
 
+// TestDetectManualClassificationsSkipsExpiredFolder is Finding 2 from the
+// whole-branch review: v3_seed_expired_category (db.go) seeds a category
+// with ID "expired" for the Expired folder, and DetectManualClassifications
+// iterates every category folder. A message sitting in Expired with no
+// verdict and no placement is this pipeline's own terminal state, not a
+// user classification -- it must not be recorded as a manual filing or
+// train DistillRules toward a rule that expires that sender's mail
+// wholesale.
+func TestDetectManualClassificationsSkipsExpiredFolder(t *testing.T) {
+	d := openTestDB(t)
+	cfg := testConfig()
+
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	// db.Open's v3_seed_expired_category migration already seeded an
+	// "expired" category pointing at "Expired"; use that folder name
+	// directly rather than re-declaring the category.
+	cats, err := d.GetCategories()
+	if err != nil {
+		t.Fatalf("GetCategories: %v", err)
+	}
+	var expiredFolder string
+	for _, c := range cats {
+		if c.ID == "expired" {
+			expiredFolder = c.FolderName
+		}
+	}
+	if expiredFolder == "" {
+		t.Fatal("expected seeded \"expired\" category to have a folder name")
+	}
+
+	s := New(d, cfg)
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			expiredFolder: {
+				{MessageID: "<sitting-in-expired@example.com>", UID: 1, Subject: "past its deadline"},
+			},
+		},
+	}
+	if err := s.DetectManualClassifications(client, "acct"); err != nil {
+		t.Fatalf("DetectManualClassifications: %v", err)
+	}
+
+	v, err := d.GetVerdictByMessageID("<sitting-in-expired@example.com>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v != nil {
+		t.Errorf("expected no verdict recorded for a message already in Expired, got %+v", v)
+	}
+
+	examples, err := d.GetTrainingExamples("expired")
+	if err != nil {
+		t.Fatalf("GetTrainingExamples: %v", err)
+	}
+	if len(examples) != 0 {
+		t.Errorf("expected no training example from the Expired folder, got %d", len(examples))
+	}
+}
+
 // TestDetectFeedbackDeletesPlacement verifies that when the user reverses a
 // move MailReaper made -- the message reappears in the inbox and its
 // verdict flips to "corrected" -- the placement record for that
