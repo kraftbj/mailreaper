@@ -109,8 +109,17 @@ probe-before-acting pattern of `migrateLLMCacheCompositeKey` and
 column is already present (fresh database), otherwise `ALTER TABLE ... ADD
 COLUMN` and seed it.
 
-Seed values: `1` for `promotion`, `notification`, `hobbies`; `0` for
-`receipt`, `newsletter`, `expired`.
+Seed: `1` for category ids in `('promotion','promotions','notification',
+'notifications','hobby','hobbies')`; everything else keeps the `0` default,
+which covers `paper-trail`, `newsletters`, and `expired`.
+
+Both singular and plural forms are listed deliberately. The `llm-classify`
+rules in `rules/defaults.go` use singular category names (`promotion`,
+`notification`), but the category rows in the live database are plural
+(`promotions`, `notifications`, `hobbies`). Matching one form only would
+leave the other silently unflagged, and an unflagged category never expires
+anything — a failure that is invisible until someone notices mail piling up
+months later, which is exactly how defect 2 survived.
 
 The default is `0`. A category the user adds later, and never thinks about,
 must not start silently expiring mail — false negatives over false positives
