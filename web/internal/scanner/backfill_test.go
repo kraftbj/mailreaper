@@ -503,3 +503,133 @@ func TestBackfillLowConfidenceLeavesMessageInPlace(t *testing.T) {
 		t.Errorf("DestinationFolder = %q, want unchanged Folders/AI-Triage/Notifications", v.DestinationFolder)
 	}
 }
+
+// TestBackfillExtractsDeadlineInPerishableFolder covers the catch-up case:
+// a message already sitting in Promotions, routed there by a classify rule
+// that never asked about deadlines, whose body says the sale is over. The
+// backfill must pull it into Expired.
+//
+// This is also how manually-filed mail gets caught: those verdicts were
+// written by DetectManualClassifications and never carried a deadline, but
+// the messages are physically in the folder.
+func TestBackfillExtractsDeadlineInPerishableFolder(t *testing.T) {
+	d := openTestDB(t)
+	seedDeadlineCategories(t, d)
+
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := d.SaveCategory(db.Category{
+		ID: "expired", Name: "Expired", FolderName: "Folders/AI-Triage/Expired",
+	}); err != nil {
+		t.Fatalf("save expired category: %v", err)
+	}
+	if err := d.SaveRule(db.Rule{
+		ID:                "auto-shop-example-test",
+		Name:              "shop@example.test → Promotions",
+		Enabled:           true,
+		Priority:          27,
+		MatchConfig:       db.MatchConfig{SenderPatterns: []string{"*@example.test"}},
+		ExpirationConfig:  db.ExpirationConfig{Type: "classify"},
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+		Action:            "move",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	past := time.Now().Add(-24 * time.Hour)
+	s, _ := deadlineTestScanner(t, d, past.Format(time.RFC3339), "sale ended Friday", 0.95)
+
+	msg := imappkg.FetchedMessage{
+		UID:       1,
+		MessageID: "<stale-promo@test>",
+		Subject:   "Sale ends Friday",
+		Sender:    "shop@example.test",
+		Date:      time.Now().Add(-96 * time.Hour),
+		Folder:    "Folders/AI-Triage/Promotions",
+	}
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Promotions": {msg},
+		},
+	}
+
+	if _, err := s.BackfillFolders(context.Background(), client, "acct", "INBOX"); err != nil {
+		t.Fatalf("BackfillFolders: %v", err)
+	}
+
+	if len(client.movedMsgs) != 1 {
+		t.Fatalf("recorded %d move(s), want 1", len(client.movedMsgs))
+	}
+	if client.movedMsgs[0] != "Folders/AI-Triage/Expired" {
+		t.Errorf("moved to %q, want Folders/AI-Triage/Expired", client.movedMsgs[0])
+	}
+
+	v, err := d.GetVerdictByMessageID("<stale-promo@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected a verdict, got nil")
+	}
+	if v.ExpiresAt == nil {
+		t.Error("ExpiresAt was not persisted by the backfill")
+	}
+}
+
+// TestBackfillSkipsDeadlineCheckInNonPerishableFolder asserts the flag gates
+// the backfill too, on the call count. Backfill walks entire folders, so an
+// ungated pass would spend a call on every message in Newsletters -- the
+// single largest population, and one that never expires.
+func TestBackfillSkipsDeadlineCheckInNonPerishableFolder(t *testing.T) {
+	d := openTestDB(t)
+	seedDeadlineCategories(t, d)
+
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := d.SaveCategory(db.Category{
+		ID: "expired", Name: "Expired", FolderName: "Folders/AI-Triage/Expired",
+	}); err != nil {
+		t.Fatalf("save expired category: %v", err)
+	}
+	if err := d.SaveRule(db.Rule{
+		ID:                "auto-news-example-test",
+		Name:              "news@example.test → Newsletters",
+		Enabled:           true,
+		Priority:          27,
+		MatchConfig:       db.MatchConfig{SenderPatterns: []string{"*@example.test"}},
+		ExpirationConfig:  db.ExpirationConfig{Type: "classify"},
+		DestinationFolder: "Folders/AI-Triage/Newsletters",
+		Action:            "move",
+	}); err != nil {
+		t.Fatalf("save rule: %v", err)
+	}
+
+	past := time.Now().Add(-24 * time.Hour)
+	s, calls := deadlineTestScanner(t, d, past.Format(time.RFC3339), "sale ended", 0.95)
+
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Newsletters": {{
+				UID:       1,
+				MessageID: "<weekly@test>",
+				Subject:   "This week's issue",
+				Sender:    "news@example.test",
+				Date:      time.Now().Add(-96 * time.Hour),
+				Folder:    "Folders/AI-Triage/Newsletters",
+			}},
+		},
+	}
+
+	if _, err := s.BackfillFolders(context.Background(), client, "acct", "INBOX"); err != nil {
+		t.Fatalf("BackfillFolders: %v", err)
+	}
+
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("recorded %d move(s) out of a non-perishable folder, want 0", len(client.movedMsgs))
+	}
+	if got := atomic.LoadInt32(calls); got != 0 {
+		t.Errorf("made %d LLM call(s) in a non-perishable folder, want 0", got)
+	}
+}

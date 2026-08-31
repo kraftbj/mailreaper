@@ -47,6 +47,7 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 	}
 
 	expiredFolder := s.canonicalExpiredFolder()
+	deadlineChecked := s.deadlineCheckedFolders()
 
 	cats, err := s.db.GetCategories()
 	if err != nil {
@@ -127,6 +128,20 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			confidence := 0.0
 			if verdict != nil {
 				confidence = verdict.Confidence
+			}
+
+			/* Ordered ahead of the Kept check on purpose: a message whose
+			deadline is still in the future keeps its current folder, which
+			means the Kept branch claims it. Running the check after that
+			would leave exactly the mail this backfill exists to catch --
+			everything already sitting in a perishable folder -- without a
+			deadline. */
+			if confidence >= 0.7 {
+				var deadline *time.Time
+				dest, deadline, _ = s.applyDeadlineCheck(ctx, client, &msg, verdict, dest, deadlineChecked, expiredFolder)
+				if deadline != nil && verdict != nil {
+					verdict.ExpiresAt = deadline
+				}
 			}
 
 			/* Safe to check this ahead of the confidence gate below only
