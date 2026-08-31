@@ -67,6 +67,20 @@ func (s *Scanner) SweepDeferredExpiries(client MailClient, accountID string) err
 			log.Printf("sweep deferred: get messages in %q: %v", folder, err)
 			continue
 		}
+		if len(msgs) == 0 {
+			/* An empty listing is not proof the folder is empty: the IMAP
+			client returns (nil, nil) both for a genuinely empty folder and
+			when its SEARCH response fails the SeqSet type assertion (see
+			internal/imap/client.go). Orphaning every verdict for this
+			folder on that ambiguity would permanently exclude them from
+			GetDeferredExpiries -- the same failure mode this rewrite exists
+			to fix, just triggered by a bad IMAP round-trip instead of an
+			unbounded backlog. Skip the folder and let the next cycle try
+			again; this costs one folder listing per cycle for a folder
+			that is truly empty. */
+			log.Printf("sweep deferred: %q returned no messages; skipping rather than orphaning %d verdict(s)", folder, len(verdicts))
+			continue
+		}
 
 		uidByMessageID := make(map[string]uint32, len(msgs))
 		for _, m := range msgs {

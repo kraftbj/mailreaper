@@ -138,9 +138,15 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			deadline. */
 			if confidence >= 0.7 {
 				var deadline *time.Time
-				dest, deadline, _ = s.applyDeadlineCheck(ctx, client, &msg, verdict, dest, deadlineChecked, expiredFolder)
-				if deadline != nil && verdict != nil {
-					verdict.ExpiresAt = deadline
+				var reason string
+				dest, deadline, reason = s.applyDeadlineCheck(ctx, client, &msg, verdict, dest, deadlineChecked, expiredFolder)
+				if verdict != nil {
+					if deadline != nil {
+						verdict.ExpiresAt = deadline
+					}
+					if reason != "" {
+						verdict.Reason = reason
+					}
 				}
 			}
 
@@ -184,7 +190,7 @@ func (s *Scanner) BackfillFolders(ctx context.Context, client MailClient, accoun
 			}
 
 			activityType := "triaged"
-			if verdict != nil && verdict.Expired {
+			if verdict != nil && (verdict.Expired || (expiredFolder != "" && strings.EqualFold(dest, expiredFolder))) {
 				activityType = "expired"
 			}
 			ruleName := "Backfill: no rule matched"

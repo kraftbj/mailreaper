@@ -549,28 +549,26 @@ func (d *DB) migratePlacementsBackfill() error {
 	return nil
 }
 
-/*
-migrateCategoryCheckDeadlines adds categories.check_deadlines to databases
-created before the column existed, then flags the perishable built-in
-categories.
-
-Fresh databases already have the column from the base schema's CREATE TABLE
-(applyOneShotMigrations runs after that block), so the ALTER is guarded by a
-PRAGMA probe the same way migrateLLMCacheCompositeKey guards its rebuild.
-The seeding UPDATE runs either way: on a fresh database only the "expired"
-category exists, so it matches nothing.
-
-Both singular and plural ids are listed. The llm-classify rules in
-rules/defaults.go name categories in the singular ("promotion",
-"notification"), while the category rows this deployment actually holds are
-plural ("promotions", "notifications"). Matching one form only would leave
-the other unflagged, and an unflagged category expires nothing -- a failure
-invisible until mail has piled up for months, which is exactly how the
-stalled sweep went unnoticed.
-
-The default stays 0. A category the user adds later and never thinks about
-must not silently start expiring mail.
-*/
+// migrateCategoryCheckDeadlines adds categories.check_deadlines to databases
+// created before the column existed, then flags the perishable built-in
+// categories.
+//
+// Fresh databases already have the column from the base schema's CREATE
+// TABLE (applyOneShotMigrations runs after that block), so the ALTER is
+// guarded by a PRAGMA probe the same way migrateLLMCacheCompositeKey guards
+// its rebuild. The seeding UPDATE runs either way: on a fresh database only
+// the "expired" category exists, so it matches nothing.
+//
+// Both singular and plural ids are listed. The llm-classify rules in
+// rules/defaults.go name categories in the singular ("promotion",
+// "notification"), while the category rows this deployment actually holds
+// are plural ("promotions", "notifications"). Matching one form only would
+// leave the other unflagged, and an unflagged category expires nothing -- a
+// failure invisible until mail has piled up for months, which is exactly how
+// the stalled sweep went unnoticed.
+//
+// The default stays 0. A category the user adds later and never thinks about
+// must not silently start expiring mail.
 func (d *DB) migrateCategoryCheckDeadlines() error {
 	var hasColumn bool
 	rows, err := d.Query(`PRAGMA table_info(categories)`)

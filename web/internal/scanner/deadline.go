@@ -49,6 +49,17 @@ Extracted from evaluateLLM so the "llm" rule type and the after-routing check
 body cap, and the training-example lookup must not drift between the two
 callers: a divergence there would show up as duplicate spend or as one caller
 silently reading the other's cache miss.
+
+The cache key itself -- s.llmCacheKey("analysis") -- does not incorporate
+customPrompt or category, so evaluateLLM (which passes a rule's Prompt and
+Category) and applyDeadlineCheck (which passes "", "") read and write the
+same cache row for a given message. That is safe only because at most one of
+them ever runs per message: evaluateMessage is first-match-wins, and verdict
+dedup stops a message from being re-evaluated once it has a cached verdict.
+It stops being safe the moment an "llm" rule is given a priority below a
+classify rule's, since that would let both callers reach the same message --
+whichever ran first would have its prompt-specific answer served back to the
+other.
 */
 func (s *Scanner) analyzeDeadline(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, customPrompt, category string) (*llm.LLMResponse, error) {
 	cacheKey := s.llmCacheKey("analysis")

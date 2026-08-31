@@ -185,6 +185,83 @@ func TestSweepMessageMissingFromFolder(t *testing.T) {
 	}
 }
 
+// TestSweepEmptyFolderListingDoesNotOrphan verifies that a deferred verdict
+// is left untouched when its folder's message listing comes back empty,
+// rather than being marked orphaned.
+//
+// internal/imap/client.go returns (nil, nil) from GetMessagesInFolder both
+// when a folder is genuinely empty and when its SEARCH response fails the
+// SeqSet type assertion. The sweep cannot tell those cases apart, so it must
+// not treat an empty listing as proof the message is gone: doing so would
+// let one bad IMAP round trip permanently orphan every verdict for the
+// folder.
+func TestSweepEmptyFolderListingDoesNotOrphan(t *testing.T) {
+	d := openTestDB(t)
+	cfg := testConfig()
+	s := New(d, cfg)
+
+	expiredFolder := s.canonicalExpiredFolder()
+	if expiredFolder == "" {
+		t.Fatal("no expired category resolved; this test would pass vacuously")
+	}
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	past := time.Now().Add(-24 * time.Hour)
+	if err := d.SaveVerdict(db.Verdict{
+		AccountID:         "acct",
+		MessageIDHeader:   "<still-there@test>",
+		Subject:           "should survive a bad listing",
+		SentAt:            time.Now().Add(-96 * time.Hour),
+		Status:            "executed",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+		ExpiresAt:         &past,
+		Confidence:        0.9,
+		EvaluatedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveVerdict: %v", err)
+	}
+
+	// No messages at all for this folder -- indistinguishable, from the
+	// sweep's side, from a failed SeqSet assertion.
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{},
+	}
+
+	if err := s.SweepDeferredExpiries(client, "acct"); err != nil {
+		t.Fatalf("SweepDeferredExpiries: %v", err)
+	}
+	if len(client.movedMsgs) != 0 {
+		t.Errorf("recorded %d move(s), want 0", len(client.movedMsgs))
+	}
+
+	v, err := d.GetVerdictByMessageID("<still-there@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected the verdict to survive as a row, got nil")
+	}
+	if v.Status != "executed" {
+		t.Errorf("Status = %q, want %q (must not be orphaned by an empty listing)", v.Status, "executed")
+	}
+
+	again, err := d.GetDeferredExpiries("acct")
+	if err != nil {
+		t.Fatalf("GetDeferredExpiries: %v", err)
+	}
+	found := false
+	for _, e := range again {
+		if e.MessageIDHeader == "<still-there@test>" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("verdict is missing from GetDeferredExpiries after an empty folder listing; it should still be picked up next cycle")
+	}
+}
+
 // TestSweepFetchesEachFolderOnce is the regression test for the defect that
 // stalled the live sweep: GetMessagesInFolder was called inside the
 // per-verdict loop, so N past-due verdicts meant N full SELECT + SEARCH ALL +
