@@ -207,12 +207,13 @@ func (d *DB) migrate() error {
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS categories (
-			id           TEXT PRIMARY KEY,
-			name         TEXT,
-			folder_name  TEXT,
-			icon         TEXT,
-			color        TEXT,
-			created_at   TIMESTAMP
+			id              TEXT PRIMARY KEY,
+			name            TEXT,
+			folder_name     TEXT,
+			icon            TEXT,
+			color           TEXT,
+			created_at      TIMESTAMP,
+			check_deadlines INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS declined_auto_rules (
@@ -314,6 +315,15 @@ func (d *DB) applyOneShotMigrations() error {
 		regardless of what v5_placements recorded. See
 		migratePlacementsBackfill for the exclusions that matter. */
 		{key: "v6_placements_backfill", fn: (*DB).migratePlacementsBackfill},
+
+		/* 2026-08-31: perishable categories. Mail routed into Promotions,
+		Notifications, or Hobbies by a pattern-matching classify rule never
+		had its deadline extracted, because EvaluateClassify short-circuits
+		the only rules that ask. The scanner now runs an extraction pass
+		after routing, gated on this flag so Paper-Trail and Newsletters --
+		which do not expire -- cost nothing. See the design doc:
+		docs/superpowers/specs/2026-08-31-triage-folder-expiry-design.md */
+		{key: "v7_category_check_deadlines", fn: (*DB).migrateCategoryCheckDeadlines},
 	}
 
 	for _, m := range migrations {
@@ -535,6 +545,67 @@ func (d *DB) migratePlacementsBackfill() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("backfill placements from executed verdicts: %w", err)
+	}
+	return nil
+}
+
+/*
+migrateCategoryCheckDeadlines adds categories.check_deadlines to databases
+created before the column existed, then flags the perishable built-in
+categories.
+
+Fresh databases already have the column from the base schema's CREATE TABLE
+(applyOneShotMigrations runs after that block), so the ALTER is guarded by a
+PRAGMA probe the same way migrateLLMCacheCompositeKey guards its rebuild.
+The seeding UPDATE runs either way: on a fresh database only the "expired"
+category exists, so it matches nothing.
+
+Both singular and plural ids are listed. The llm-classify rules in
+rules/defaults.go name categories in the singular ("promotion",
+"notification"), while the category rows this deployment actually holds are
+plural ("promotions", "notifications"). Matching one form only would leave
+the other unflagged, and an unflagged category expires nothing -- a failure
+invisible until mail has piled up for months, which is exactly how the
+stalled sweep went unnoticed.
+
+The default stays 0. A category the user adds later and never thinks about
+must not silently start expiring mail.
+*/
+func (d *DB) migrateCategoryCheckDeadlines() error {
+	var hasColumn bool
+	rows, err := d.Query(`PRAGMA table_info(categories)`)
+	if err != nil {
+		return fmt.Errorf("probe categories schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan categories schema: %w", err)
+		}
+		if name == "check_deadlines" {
+			hasColumn = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate categories schema: %w", err)
+	}
+
+	if !hasColumn {
+		if _, err := d.Exec(`ALTER TABLE categories ADD COLUMN check_deadlines INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add categories.check_deadlines: %w", err)
+		}
+	}
+
+	if _, err := d.Exec(`
+		UPDATE categories SET check_deadlines = 1
+		WHERE id IN ('promotion', 'promotions', 'notification', 'notifications', 'hobby', 'hobbies')
+	`); err != nil {
+		return fmt.Errorf("seed categories.check_deadlines: %w", err)
 	}
 	return nil
 }

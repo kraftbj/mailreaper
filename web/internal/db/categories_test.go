@@ -1,9 +1,13 @@
 package db_test
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/kraftbj/mailreaper/internal/db"
+
+	_ "modernc.org/sqlite"
 )
 
 // withoutSeededExpired filters out the "expired" category that db.Open
@@ -127,5 +131,140 @@ func TestDeleteCategory(t *testing.T) {
 	}
 	if got := withoutSeededExpired(all); len(got) != 0 {
 		t.Errorf("expected 0 categories after delete, got %d", len(got))
+	}
+}
+
+// TestCategoryCheckDeadlinesRoundTrip proves the flag survives a save/load
+// cycle in both directions. A one-directional test would pass against a
+// SaveCategory whose ON CONFLICT clause forgets the column, which is the
+// realistic way to get this wrong.
+func TestCategoryCheckDeadlinesRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+
+	if err := d.SaveCategory(db.Category{
+		ID: "promotions", Name: "Promotions", FolderName: "Promotions",
+		CheckDeadlines: true,
+	}); err != nil {
+		t.Fatalf("SaveCategory: %v", err)
+	}
+	if err := d.SaveCategory(db.Category{
+		ID: "paper-trail", Name: "Paper-Trail", FolderName: "Paper-Trail",
+	}); err != nil {
+		t.Fatalf("SaveCategory: %v", err)
+	}
+
+	got := map[string]bool{}
+	cats, err := d.GetCategories()
+	if err != nil {
+		t.Fatalf("GetCategories: %v", err)
+	}
+	for _, c := range cats {
+		got[c.ID] = c.CheckDeadlines
+	}
+
+	if !got["promotions"] {
+		t.Error("promotions: CheckDeadlines = false, want true")
+	}
+	if got["paper-trail"] {
+		t.Error("paper-trail: CheckDeadlines = true, want false")
+	}
+}
+
+// TestCategoryCheckDeadlinesUpsertClearsFlag verifies the flag can be turned
+// back off. SaveCategory is an upsert, so a missing column in the ON CONFLICT
+// SET list leaves a stale 1 in place forever and the UI checkbox appears
+// broken only when unchecking.
+func TestCategoryCheckDeadlinesUpsertClearsFlag(t *testing.T) {
+	d := openTestDB(t)
+
+	cat := db.Category{ID: "hobbies", Name: "Hobbies", FolderName: "Hobbies", CheckDeadlines: true}
+	if err := d.SaveCategory(cat); err != nil {
+		t.Fatalf("SaveCategory (on): %v", err)
+	}
+	cat.CheckDeadlines = false
+	if err := d.SaveCategory(cat); err != nil {
+		t.Fatalf("SaveCategory (off): %v", err)
+	}
+
+	cats, err := d.GetCategories()
+	if err != nil {
+		t.Fatalf("GetCategories: %v", err)
+	}
+	for _, c := range cats {
+		if c.ID == "hobbies" && c.CheckDeadlines {
+			t.Fatal("CheckDeadlines stayed true after saving it false")
+		}
+	}
+}
+
+// TestCheckDeadlinesMigrationSeedsPerishableCategories exercises the upgrade
+// path a real user is on: a database whose categories table predates the
+// column, holding the plural category ids this deployment actually uses.
+//
+// The table is created by hand with the old shape, then reopened so
+// applyOneShotMigrations runs against it. Asserting on a fresh database
+// instead would prove nothing -- the base CREATE TABLE already has the
+// column there, and the seeding UPDATE would match no rows.
+func TestCheckDeadlinesMigrationSeedsPerishableCategories(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE categories (
+			id           TEXT PRIMARY KEY,
+			name         TEXT,
+			folder_name  TEXT,
+			icon         TEXT,
+			color        TEXT,
+			created_at   TIMESTAMP
+		)`); err != nil {
+		t.Fatalf("create legacy categories table: %v", err)
+	}
+	for _, row := range [][2]string{
+		{"promotions", "Folders/AI-Triage/Promotions"},
+		{"notifications", "Folders/AI-Triage/Notifications"},
+		{"hobbies", "Folders/AI-Triage/Hobbies"},
+		{"newsletters", "Folders/AI-Triage/Newsletters"},
+		{"paper-trail", "Folders/AI-Triage/Paper-Trail"},
+	} {
+		if _, err := legacy.Exec(
+			`INSERT INTO categories (id, name, folder_name, created_at) VALUES (?, ?, ?, datetime('now'))`,
+			row[0], row[0], row[1],
+		); err != nil {
+			t.Fatalf("seed legacy category %q: %v", row[0], err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open on legacy database: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	cats, err := d.GetCategories()
+	if err != nil {
+		t.Fatalf("GetCategories: %v", err)
+	}
+	got := map[string]bool{}
+	for _, c := range cats {
+		got[c.ID] = c.CheckDeadlines
+	}
+
+	for _, id := range []string{"promotions", "notifications", "hobbies"} {
+		if !got[id] {
+			t.Errorf("%s: CheckDeadlines = false after migration, want true", id)
+		}
+	}
+	for _, id := range []string{"newsletters", "paper-trail", "expired"} {
+		if got[id] {
+			t.Errorf("%s: CheckDeadlines = true after migration, want false", id)
+		}
 	}
 }
