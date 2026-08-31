@@ -53,6 +53,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 	}
 
 	expiredFolder := s.canonicalExpiredFolder()
+	deadlineChecked := s.deadlineCheckedFolders()
 
 	var since time.Time
 	if s.LookbackDays > 0 {
@@ -150,6 +151,13 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 					log.Printf("scanner: could not resolve an \"expired\" category folder (missing or misconfigured); falling back to literal %q", dest)
 				}
 
+				/* A routing rule picked the folder; if it supplied no
+				deadline and that folder is perishable, ask for one now. A
+				past deadline overrides the folder. See applyDeadlineCheck. */
+				var deadline *time.Time
+				dest, deadline, v.Reason = s.applyDeadlineCheck(ctx, client, &msg, verdict, dest, deadlineChecked, expiredFolder)
+				v.ExpiresAt = deadline
+
 				// The move is authoritative. On failure the verdict is saved
 				// as move_failed with no acted_at: dedup then skips it (so we
 				// do not re-spend an LLM call every scan), a retry pass can
@@ -190,7 +198,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 				}
 
 				activityType := "triaged"
-				if verdict.Expired {
+				if verdict.Expired || (expiredFolder != "" && strings.EqualFold(dest, expiredFolder)) {
 					activityType = "expired"
 				}
 
@@ -755,9 +763,9 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 	return result, nil
 }
 
-// evaluateLLM handles "llm" rule types (deadline-only extraction). It uses
-// the cache to avoid re-asking about previously-seen messages, then applies
-// the same past/future + confidence-guard logic as the multi-classify path.
+// evaluateLLM handles "llm" rule types (deadline-only extraction). The cache
+// read, body fetch, and prompt call live in analyzeDeadline (deadline.go),
+// shared with the after-routing deadline check so the two cannot drift.
 //
 // Returns:
 //   - past extracted deadline → expired verdict routed to canonical Expired folder
@@ -766,81 +774,9 @@ func (s *Scanner) evaluateMultiClassify(ctx context.Context, client MailClient, 
 //     re-evaluate from cache and produce the verdict)
 //   - no deadline → nil
 func (s *Scanner) evaluateLLM(ctx context.Context, client MailClient, msg *imappkg.FetchedMessage, rule db.Rule, expiredFolder string) (*rules.RuleVerdict, error) {
-	cacheKey := s.llmCacheKey("analysis")
-
-	cached, err := s.db.GetCachedVerdict(msg.MessageID, cacheKey)
+	result, err := s.analyzeDeadline(ctx, client, msg, rule.ExpirationConfig.Prompt, rule.ExpirationConfig.Category)
 	if err != nil {
-		return nil, fmt.Errorf("get cached verdict: %w", err)
-	}
-
-	var result *llm.LLMResponse
-	if cached != nil {
-		if cached.Error != "" {
-			/* Surface the cached failure rather than silently reconstructing
-			an empty response: within the 10-minute error TTL a network call
-			is skipped, but the outage must stay visible in the logs the way
-			a fresh failure would be (see evaluateMessage's "llm" case, which
-			logs whatever error comes back). */
-			return nil, fmt.Errorf("cached llm error: %s", cached.Error)
-		}
-		result = &llm.LLMResponse{
-			ExpiresAt:  cached.ExpiresAt,
-			Reason:     cached.Reason,
-			Confidence: cached.Confidence,
-			Matches:    cached.Classified,
-		}
-	} else {
-		body, fetchErr := client.FetchBody(msg.Folder, msg.UID)
-		if fetchErr != nil {
-			log.Printf("scanner: llm fetch body uid=%d: %v", msg.UID, fetchErr)
-			body = ""
-		}
-		if len(body) > 2000 {
-			body = body[:2000]
-		}
-
-		category := rule.ExpirationConfig.Category
-		if category == "" {
-			category = "expiry"
-		}
-		trainingExamples, err := s.db.GetTrainingExamples(category)
-		if err != nil {
-			log.Printf("scanner: get training examples: %v", err)
-		}
-
-		refs := make([]llm.TrainingRef, 0, len(trainingExamples))
-		for _, ex := range trainingExamples {
-			refs = append(refs, llm.TrainingRef{
-				Sender:  ex.Sender,
-				Subject: ex.Subject,
-			})
-		}
-
-		msgData := llm.MessageData{
-			Sender:       msg.Sender,
-			Subject:      msg.Subject,
-			SentDate:     msg.Date.Format(time.RFC3339),
-			BodySnippet:  body,
-			CustomPrompt: rule.ExpirationConfig.Prompt,
-			Category:     rule.ExpirationConfig.Category,
-		}
-
-		systemPrompt, userContent := llm.BuildAnalysisPrompt(msgData, refs)
-
-		result, err = llm.CallLLM(ctx, &s.cfg.LLM, systemPrompt, userContent)
-		if err != nil {
-			_ = s.db.SetCachedVerdict(msg.MessageID, cacheKey, db.CachedVerdict{Error: err.Error()})
-			return nil, fmt.Errorf("call llm: %w", err)
-		}
-
-		cv := db.CachedVerdict{
-			ExpiresAt:  result.ExpiresAt,
-			Reason:     result.Reason,
-			Confidence: result.Confidence,
-		}
-		if err := s.db.SetCachedVerdict(msg.MessageID, cacheKey, cv); err != nil {
-			log.Printf("scanner: cache verdict for %q: %v", msg.MessageID, err)
-		}
+		return nil, err
 	}
 
 	expiresAt, past, hasDeadline := extractValidExpiresAt(result.ExpiresAt, result.Confidence, s.loc, msg.Date)
