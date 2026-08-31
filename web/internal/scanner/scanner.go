@@ -210,7 +210,7 @@ func (s *Scanner) ScanAccount(ctx context.Context, client MailClient, accountID 
 					Sender:          msg.Sender,
 					RuleName:        verdict.Rule.Name,
 					Destination:     dest,
-					Reason:          verdict.Reason,
+					Reason:          v.Reason,
 					Confidence:      verdict.Confidence,
 				}); err != nil {
 					log.Printf("scanner: log activity for %q: %v", msg.MessageID, err)

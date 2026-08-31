@@ -141,11 +141,15 @@ It runs after routing rather than before it so that llm-classify messages,
 which already receive a deadline from their combined classify+extract call,
 pay nothing extra.
 
-Every path that does not apply -- an existing deadline, a non-perishable or
-unmapped destination, provider "none", an LLM error, no deadline found, an
-extraction rejected by extractValidExpiresAt's confidence and plausibility
-guards -- returns dest unchanged and a nil deadline, so the caller behaves
-exactly as it does today.
+If the verdict already carries a deadline (an llm-classify call, say),
+nothing runs and dest is returned unchanged alongside that existing
+deadline -- never nil, since a nil return here would let the caller
+overwrite a deadline the classify call already found. Every other path
+that does not apply -- a non-perishable or unmapped destination, provider
+"none", an LLM error, no deadline found, an extraction rejected by
+extractValidExpiresAt's confidence and plausibility guards -- returns dest
+unchanged and a nil deadline, so the caller behaves exactly as it does
+today.
 */
 func (s *Scanner) applyDeadlineCheck(
 	ctx context.Context,

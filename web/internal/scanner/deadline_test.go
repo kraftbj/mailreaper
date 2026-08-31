@@ -236,7 +236,7 @@ func TestApplyDeadlineCheckDropsLowConfidence(t *testing.T) {
 	seedDeadlineCategories(t, d)
 
 	past := time.Now().Add(-24 * time.Hour)
-	s, _ := deadlineTestScanner(t, d, past.Format(time.RFC3339), "maybe expired?", 0.4)
+	s, calls := deadlineTestScanner(t, d, past.Format(time.RFC3339), "maybe expired?", 0.4)
 
 	verdict := &rules.RuleVerdict{Classified: true, Confidence: 1.0}
 	dest, expiresAt, _ := s.applyDeadlineCheck(
@@ -250,6 +250,9 @@ func TestApplyDeadlineCheckDropsLowConfidence(t *testing.T) {
 	}
 	if expiresAt != nil {
 		t.Error("expiresAt was set from a below-threshold extraction")
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Errorf("made %d LLM call(s), want 1 -- the extraction should run and be rejected by the confidence guard, not skipped", got)
 	}
 }
 
@@ -349,5 +352,8 @@ func TestScanCycleClassifyRuleGetsDeadlineCheck(t *testing.T) {
 	}
 	if actLog[0].Type != "expired" {
 		t.Errorf("activity Type = %q, want expired; a redirect to Expired is an expiry, not a triage", actLog[0].Type)
+	}
+	if actLog[0].Reason != "sale ended Friday" {
+		t.Errorf("activity Reason = %q, want the model's reason (\"sale ended Friday\"); the audit trail must not still say the original rule name", actLog[0].Reason)
 	}
 }
