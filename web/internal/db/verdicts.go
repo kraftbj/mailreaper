@@ -140,10 +140,21 @@ func (d *DB) ClearVerdictsByStatus(status string) (int64, error) {
 	return n, nil
 }
 
-// GetDeferredExpiries returns verdicts that have an expires_at in the past but
-// haven't been moved to the expired folder yet. These are messages that were
-// classified with a future expiry date that has now arrived.
-func (d *DB) GetDeferredExpiries() ([]Verdict, error) {
+/*
+GetDeferredExpiries returns verdicts for one account that have an expires_at
+in the past but have not been moved to the expired folder yet -- messages
+classified with a future expiry date that has now arrived.
+
+The account filter is load-bearing rather than cosmetic. SweepDeferredExpiries
+runs once per connected account; without it, every account's expiries were
+swept against whichever account's IMAP client happened to be connected,
+guaranteeing not-found results for the others.
+
+The status filter also excludes 'orphaned' by construction: those are
+verdicts whose message has left the folder they recorded, which no sweep can
+ever satisfy. See SweepDeferredExpiries.
+*/
+func (d *DB) GetDeferredExpiries(accountID string) ([]Verdict, error) {
 	rows, err := d.Query(`
 		SELECT id, account_id, message_id_header, subject, sender, sent_at,
 		       rule_id, status, destination_folder, expires_at, reason,
@@ -151,10 +162,11 @@ func (d *DB) GetDeferredExpiries() ([]Verdict, error) {
 		FROM verdicts
 		WHERE expires_at IS NOT NULL
 		  AND expires_at != ''
+		  AND account_id = ?
 		  AND status IN ('executed', 'manual')
 		  AND destination_folder NOT LIKE '%Expired%'
 		ORDER BY expires_at ASC
-	`)
+	`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("db: get deferred expiries: %w", err)
 	}

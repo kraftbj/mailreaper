@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,23 +108,24 @@ func TestSweepMovesPastDeadlineToExpired(t *testing.T) {
 	}
 }
 
-// TestSweepMessageMissingFromFolder verifies that when the deferred verdict's
-// destination folder no longer contains the message (e.g. the user moved it
-// themselves), the sweep does not panic and does not record a move. Because
-// GetDeferredExpiries re-derives its result set from the verdict row alone
-// (no cross-check against what actually got moved), the current behavior is
-// that the same verdict is picked up again on the next sweep -- documented
-// here rather than asserted as ideal.
+// TestSweepMessageMissingFromFolder verifies that a deferred verdict whose
+// message is no longer in the folder it recorded is terminated rather than
+// retried forever.
+//
+// This replaces a test that asserted the opposite: it documented "the same
+// verdict is picked up again on the next sweep" as current behavior. That
+// behavior is the reason the live database accumulated 191 past-due verdicts
+// stuck for as long as four months -- every one of them re-listed its folder
+// on every scan cycle and could never be satisfied.
 func TestSweepMessageMissingFromFolder(t *testing.T) {
 	d := openTestDB(t)
 	cfg := testConfig()
-
 	s := New(d, cfg)
+
 	expiredFolder := s.canonicalExpiredFolder()
 	if expiredFolder == "" {
 		t.Fatal("no expired category resolved; this test would pass vacuously")
 	}
-
 	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
 		t.Fatalf("upsert account: %v", err)
 	}
@@ -132,8 +134,7 @@ func TestSweepMessageMissingFromFolder(t *testing.T) {
 	if err := d.SaveVerdict(db.Verdict{
 		AccountID:         "acct",
 		MessageIDHeader:   "<gone@test>",
-		Subject:           "sale ends yesterday",
-		Sender:            "shop@example.test",
+		Subject:           "user moved this themselves",
 		SentAt:            time.Now().Add(-96 * time.Hour),
 		Status:            "executed",
 		DestinationFolder: "Folders/AI-Triage/Promotions",
@@ -144,17 +145,18 @@ func TestSweepMessageMissingFromFolder(t *testing.T) {
 		t.Fatalf("SaveVerdict: %v", err)
 	}
 
-	/* The mock's folder listing for Promotions is empty -- the message is
-	not there (client.folderMessages has no entry, so GetMessagesInFolder
-	returns nil). */
-	client := &mockMailClient{}
+	// The folder exists but does not contain the message.
+	client := &mockMailClient{
+		folderMessages: map[string][]imappkg.FetchedMessage{
+			"Folders/AI-Triage/Promotions": {{MessageID: "<someone-else@test>", UID: 9}},
+		},
+	}
 
 	if err := s.SweepDeferredExpiries(client, "acct"); err != nil {
 		t.Fatalf("SweepDeferredExpiries: %v", err)
 	}
-
 	if len(client.movedMsgs) != 0 {
-		t.Errorf("recorded %d move(s), want 0 -- the message isn't in the folder", len(client.movedMsgs))
+		t.Errorf("recorded %d move(s), want 0", len(client.movedMsgs))
 	}
 
 	v, err := d.GetVerdictByMessageID("<gone@test>")
@@ -162,29 +164,139 @@ func TestSweepMessageMissingFromFolder(t *testing.T) {
 		t.Fatalf("GetVerdictByMessageID: %v", err)
 	}
 	if v == nil {
-		t.Fatal("expected verdict, got nil")
+		t.Fatal("expected the verdict to survive as a row, got nil")
 	}
-	// Known current behavior: nothing about the verdict changes, so
-	// GetDeferredExpiries will return this same row again on the next sweep.
-	if v.Status != "executed" {
-		t.Errorf("Status = %q, want unchanged executed", v.Status)
+	if v.Status != orphanedStatus {
+		t.Errorf("Status = %q, want %q", v.Status, orphanedStatus)
 	}
-	if v.DestinationFolder != "Folders/AI-Triage/Promotions" {
-		t.Errorf("DestinationFolder = %q, want unchanged %q", v.DestinationFolder, "Folders/AI-Triage/Promotions")
+	if v.ExpiresAt == nil {
+		t.Error("ExpiresAt was cleared; it should be preserved for forensics")
 	}
 
-	again, err := d.GetDeferredExpiries()
+	// The whole point: it must not come back.
+	again, err := d.GetDeferredExpiries("acct")
 	if err != nil {
 		t.Fatalf("GetDeferredExpiries: %v", err)
 	}
-	found := false
-	for _, dv := range again {
-		if dv.MessageIDHeader == "<gone@test>" {
-			found = true
+	for _, e := range again {
+		if e.MessageIDHeader == "<gone@test>" {
+			t.Fatal("orphaned verdict is still returned by GetDeferredExpiries; the backlog cannot drain")
 		}
 	}
-	if !found {
-		t.Error("expected the untouched verdict to still surface as a deferred expiry (documented retry-forever behavior)")
+}
+
+// TestSweepFetchesEachFolderOnce is the regression test for the defect that
+// stalled the live sweep: GetMessagesInFolder was called inside the
+// per-verdict loop, so N past-due verdicts meant N full SELECT + SEARCH ALL +
+// FETCH ENVELOPE round trips against folders holding thousands of messages.
+//
+// Six verdicts across two folders must cost exactly two fetches.
+func TestSweepFetchesEachFolderOnce(t *testing.T) {
+	d := openTestDB(t)
+	cfg := testConfig()
+	s := New(d, cfg)
+
+	expiredFolder := s.canonicalExpiredFolder()
+	if expiredFolder == "" {
+		t.Fatal("no expired category resolved; this test would pass vacuously")
+	}
+	if err := d.UpsertAccount("acct", "Test Account"); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	past := time.Now().Add(-24 * time.Hour)
+	folders := []string{"Folders/AI-Triage/Promotions", "Folders/AI-Triage/Hobbies"}
+	folderMessages := map[string][]imappkg.FetchedMessage{}
+
+	uid := uint32(1)
+	for _, folder := range folders {
+		for i := 0; i < 3; i++ {
+			id := fmt.Sprintf("<msg-%d@test>", uid)
+			if err := d.SaveVerdict(db.Verdict{
+				AccountID:         "acct",
+				MessageIDHeader:   id,
+				Subject:           id,
+				SentAt:            time.Now().Add(-96 * time.Hour),
+				Status:            "executed",
+				DestinationFolder: folder,
+				ExpiresAt:         &past,
+				Confidence:        0.9,
+				EvaluatedAt:       time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("SaveVerdict: %v", err)
+			}
+			folderMessages[folder] = append(folderMessages[folder], imappkg.FetchedMessage{
+				MessageID: id, Folder: folder, UID: uid,
+			})
+			uid++
+		}
+	}
+
+	client := &mockMailClient{folderMessages: folderMessages}
+	if err := s.SweepDeferredExpiries(client, "acct"); err != nil {
+		t.Fatalf("SweepDeferredExpiries: %v", err)
+	}
+
+	if len(client.movedMsgs) != 6 {
+		t.Errorf("moved %d message(s), want 6", len(client.movedMsgs))
+	}
+	for _, folder := range folders {
+		if got := client.folderFetches[folder]; got != 1 {
+			t.Errorf("GetMessagesInFolder(%q) called %d time(s), want exactly 1", folder, got)
+		}
+	}
+}
+
+// TestSweepIgnoresOtherAccounts verifies the sweep is scoped to the account
+// whose IMAP client is connected. GetDeferredExpiries had no account filter,
+// so in a multi-account setup every account's expiries were swept against
+// whichever client happened to be connected. That was merely wasteful before;
+// combined with orphaning it is destructive, because the other account's
+// messages are guaranteed not to be found.
+func TestSweepIgnoresOtherAccounts(t *testing.T) {
+	d := openTestDB(t)
+	cfg := testConfig()
+	s := New(d, cfg)
+
+	if s.canonicalExpiredFolder() == "" {
+		t.Fatal("no expired category resolved; this test would pass vacuously")
+	}
+	if err := d.UpsertAccount("acct-a", "Account A"); err != nil {
+		t.Fatalf("upsert account a: %v", err)
+	}
+	if err := d.UpsertAccount("acct-b", "Account B"); err != nil {
+		t.Fatalf("upsert account b: %v", err)
+	}
+
+	past := time.Now().Add(-24 * time.Hour)
+	if err := d.SaveVerdict(db.Verdict{
+		AccountID:         "acct-b",
+		MessageIDHeader:   "<other-account@test>",
+		Subject:           "belongs to the other account",
+		SentAt:            time.Now().Add(-96 * time.Hour),
+		Status:            "executed",
+		DestinationFolder: "Folders/AI-Triage/Promotions",
+		ExpiresAt:         &past,
+		Confidence:        0.9,
+		EvaluatedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveVerdict: %v", err)
+	}
+
+	client := &mockMailClient{folderMessages: map[string][]imappkg.FetchedMessage{}}
+	if err := s.SweepDeferredExpiries(client, "acct-a"); err != nil {
+		t.Fatalf("SweepDeferredExpiries: %v", err)
+	}
+
+	if len(client.folderFetches) != 0 {
+		t.Errorf("fetched %d folder(s) for an account with no expiries, want 0", len(client.folderFetches))
+	}
+	v, err := d.GetVerdictByMessageID("<other-account@test>")
+	if err != nil {
+		t.Fatalf("GetVerdictByMessageID: %v", err)
+	}
+	if v.Status != "executed" {
+		t.Errorf("Status = %q, want executed; the other account's verdict must not be touched", v.Status)
 	}
 }
 

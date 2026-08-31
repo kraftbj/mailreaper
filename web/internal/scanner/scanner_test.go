@@ -22,6 +22,10 @@ type mockMailClient struct {
 	folderMessages map[string][]imappkg.FetchedMessage
 	moveErr        error // when set, MoveMessage fails without recording
 	fetchBodyCalls int   // counts FetchBody invocations; a proxy for "was content/LLM evaluation attempted"
+	/* folderFetches counts GetMessagesInFolder calls per folder. The sweep's
+	cost is the point of its rewrite, so it has to be observable: the
+	pre-rewrite version fetched once per verdict, not once per folder. */
+	folderFetches map[string]int
 }
 
 func (m *mockMailClient) FetchNewMessages(folder string, since time.Time, maxAge time.Duration, limit int) ([]imappkg.FetchedMessage, error) {
@@ -45,6 +49,10 @@ func (m *mockMailClient) GetMessageIDsInFolder(folder string) ([]string, error) 
 }
 
 func (m *mockMailClient) GetMessagesInFolder(folder string) ([]imappkg.FetchedMessage, error) {
+	if m.folderFetches == nil {
+		m.folderFetches = map[string]int{}
+	}
+	m.folderFetches[folder]++
 	return m.folderMessages[folder], nil
 }
 
