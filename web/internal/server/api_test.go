@@ -431,5 +431,50 @@ func TestDeleteRuleDoesNotDeclineWhenDeleteFails(t *testing.T) {
 	}
 }
 
+/*
+TestCategoryCheckDeadlinesSurvivesAPIRoundTrip guards the JSON contract
+between the settings page and the database. handleSaveCategory decodes
+straight into db.Category, so a mistyped or missing tag on CheckDeadlines
+costs no compile error and no runtime error -- the checkbox simply never
+takes effect, and the perishable-category gate silently matches nothing.
+*/
+func TestCategoryCheckDeadlinesSurvivesAPIRoundTrip(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	body := bytes.NewBufferString(`{
+		"id": "promotions",
+		"name": "Promotions",
+		"folderName": "Folders/AI-Triage/Promotions",
+		"checkDeadlines": true
+	}`)
+	rec := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/categories", body)
+	req.Header.Set("Content-Type", "application/json")
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/categories: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, newRequest(http.MethodGet, "/api/categories", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/categories: status %d", rec.Code)
+	}
+
+	var cats []db.Category
+	if err := json.Unmarshal(rec.Body.Bytes(), &cats); err != nil {
+		t.Fatalf("decode categories: %v", err)
+	}
+	for _, c := range cats {
+		if c.ID == "promotions" {
+			if !c.CheckDeadlines {
+				t.Fatal("checkDeadlines did not survive the API round trip")
+			}
+			return
+		}
+	}
+	t.Fatal("saved category was not returned by GET /api/categories")
+}
+
 // Ensure tests don't require an actual UI directory.
 var _ = os.DevNull

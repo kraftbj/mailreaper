@@ -17,7 +17,7 @@ function renderCategories() {
   if (!tbody) return;
 
   if (allCategories.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty">No categories yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">No categories yet.</td></tr>`;
     return;
   }
 
@@ -31,6 +31,7 @@ function renderCategories() {
           ? `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${esc(c.color)};vertical-align:middle;margin-right:6px"></span>${esc(c.color)}`
           : "—"}
       </td>
+      <td>${c.checkDeadlines ? "Yes" : "—"}</td>
       <td>
         <div class="flex gap-8">
           <button class="btn btn-sm btn-outline" data-edit-cat="${esc(c.id)}">Edit</button>
@@ -50,6 +51,7 @@ function openCategoryModal(cat = null) {
   document.getElementById("cat-folder").value = cat?.folderName || "";
   document.getElementById("cat-icon").value = cat?.icon || "";
   document.getElementById("cat-color").value = cat?.color || "";
+  document.getElementById("cat-check-deadlines").checked = Boolean(cat?.checkDeadlines);
   modal.classList.remove("hidden");
 }
 
@@ -68,6 +70,7 @@ async function saveCategory() {
     folderName: document.getElementById("cat-folder").value.trim() || name,
     icon: document.getElementById("cat-icon").value.trim(),
     color: document.getElementById("cat-color").value.trim(),
+    checkDeadlines: document.getElementById("cat-check-deadlines").checked,
   };
 
   try {

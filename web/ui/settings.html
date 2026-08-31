@@ -40,6 +40,7 @@
               <th>Name</th>
               <th>Folder</th>
               <th>Color</th>
+              <th>Deadlines</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -122,6 +123,18 @@
     <div class="form-group">
       <label class="form-label">Color</label>
       <input type="text" id="cat-color" class="form-control" placeholder="#9b59b6">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">
+        <input type="checkbox" id="cat-check-deadlines">
+        Check for deadlines
+      </label>
+      <div class="text-muted" style="font-size:12px;margin-top:4px;">
+        Mail filed here is scanned for a deadline in its content ("sale ends
+        Friday") and moved to Expired once that date passes. Leave off for
+        categories that never go stale, such as receipts and newsletters.
+      </div>
     </div>
 
     <div class="modal-footer">
